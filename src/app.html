@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%sveltekit.assets%/favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      (() => {
+        let preference = "system";
+        try {
+          preference = localStorage.getItem("danxi-theme") || "system";
+        } catch {}
+        const dark =
+          preference === "dark" ||
+          (preference === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.toggle("dark", dark);
+        document.documentElement.dataset.theme = preference;
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      })();
+    </script>
+    <meta
+      name="description"
+      content="旦夕新一代 Web 与桌面客户端，为复旦学生提供日程、校园服务、茶楼与评教。"
+    />
+    <title>旦夕 Next</title>
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>

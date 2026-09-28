@@ -1,0 +1,150 @@
+:root {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  color: hsl(var(--foreground));
+  background: hsl(var(--background));
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --background: 40 12% 97%;
+  --foreground: 225 10% 16%;
+  --card: 0 0% 100%;
+  --card-foreground: 225 10% 16%;
+  --primary: 211 85% 42%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 36 8% 93%;
+  --secondary-foreground: 225 9% 23%;
+  --muted: 36 8% 94%;
+  --muted-foreground: 220 7% 46%;
+  --accent: 174 28% 34%;
+  --accent-foreground: 0 0% 100%;
+  --border: 35 8% 87%;
+  --destructive: 0 72% 51%;
+  --radius: 0.85rem;
+}
+
+:root.dark {
+  --background: 225 7% 10%;
+  --foreground: 36 10% 91%;
+  --card: 225 6% 13%;
+  --card-foreground: 36 10% 91%;
+  --primary: 210 90% 62%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 225 5% 16%;
+  --secondary-foreground: 36 8% 87%;
+  --muted: 225 5% 16%;
+  --muted-foreground: 220 6% 61%;
+  --accent: 171 31% 46%;
+  --accent-foreground: 225 8% 10%;
+  --border: 225 5% 21%;
+  --destructive: 0 61% 53%;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  min-height: 100vh;
+  background: hsl(var(--background));
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Desktop feel: text is selectable only where typing or reading matters. */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea,
+[contenteditable="true"],
+.selectable {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Desktop feel: buttons keep the normal arrow cursor instead of the web hand. */
+button,
+[role="button"] {
+  cursor: default;
+}
+
+/* Thin overlay-style scrollbars instead of web-style ones. */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.45);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::selection {
+  color: hsl(var(--primary-foreground));
+  background: hsl(var(--primary));
+}
+
+.display-serif {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC",
+    sans-serif;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-rise {
+  animation: rise-in 280ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
