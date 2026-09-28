@@ -1,11 +1,9 @@
 <script lang="ts">
-  import CalendarCheck from "@lucide/svelte/icons/calendar-check";
-  import CalendarOff from "@lucide/svelte/icons/calendar-off";
   import LogIn from "@lucide/svelte/icons/log-in";
-  import MapPin from "@lucide/svelte/icons/map-pin";
+  import MoonStar from "@lucide/svelte/icons/moon-star";
+  import Sun from "@lucide/svelte/icons/sun";
   import { Button } from "$lib/components/ui/button";
   import { session } from "$lib/stores/session.svelte";
-  import { coursePalette, timetable, todayCourses } from "$lib/stores/timetable.svelte";
 
   interface Props {
     onLogin: () => void;
@@ -14,6 +12,10 @@
   let { onLogin }: Props = $props();
 
   const now = new Date();
+  const hour = now.getHours();
+  const weekdayLabels = ["一", "二", "三", "四", "五", "六", "日"];
+  const todayIndex = (now.getDay() + 6) % 7;
+  const nightTime = hour < 5 || hour >= 18;
   const dateLabel = new Intl.DateTimeFormat("zh-CN", {
     month: "long",
     day: "numeric",
@@ -21,7 +23,6 @@
   }).format(now);
 
   const greeting = (() => {
-    const hour = now.getHours();
     if (hour < 5) return "夜深了";
     if (hour < 11) return "早上好";
     if (hour < 14) return "中午好";
@@ -31,18 +32,9 @@
   const personalizedGreeting = $derived(
     session.status.campusName ? `${greeting}，${session.status.campusName}～` : `${greeting}～`,
   );
-
-  const readyTimetable = $derived(
-    timetable.state.phase === "ready" ? timetable.state.timetable : null,
-  );
-  const todayList = $derived(
-    readyTimetable
-      ? todayCourses(readyTimetable, timetable.semesterStartOverride)
-      : [],
-  );
 </script>
 
-<section class="flex h-full flex-col rounded-xl border border-border bg-card p-5">
+<section class="relative flex h-full min-h-64 flex-col overflow-hidden rounded-xl border border-border bg-card p-5">
   <div class="flex flex-col justify-between gap-5 sm:flex-row sm:items-start">
     <div>
       <div class="text-xs text-muted-foreground">
@@ -59,60 +51,33 @@
     {/if}
   </div>
 
-  <div class="mt-auto border-t border-border pt-4">
-    {#if timetable.state.phase === "ready" && todayList.length > 0}
-      <div class="space-y-2">
-        <div class="flex items-center justify-between text-xs">
-          <span class="font-medium text-foreground">今天有 {todayList.length} 门课</span>
-          <span class="text-muted-foreground">按节次排列</span>
-        </div>
-        <div class="grid gap-1.5">
-          {#each todayList.slice(0, 2) as course}
-            {@const palette = coursePalette(course.courseName)}
-            <article
-              class="grid grid-cols-[52px_1fr] items-center gap-3 rounded-r-lg px-3 py-2.5"
-              style={`background: ${palette.background}; border-left: 3px solid ${palette.bar};`}
-            >
-              <span class="text-xs font-semibold tabular-nums" style={`color: ${palette.text};`}>
-                {course.startUnit}{course.startUnit === course.endUnit ? "" : `-${course.endUnit}`} 节
-              </span>
-              <div class="min-w-0">
-                <p class="m-0 truncate text-sm font-medium text-foreground">{course.courseName}</p>
-                {#if course.roomName}
-                  <p class="mb-0 mt-0.5 flex items-center gap-1 truncate text-[11px] text-muted-foreground">
-                    <MapPin size={11} class="shrink-0" /> {course.roomName}
-                  </p>
-                {/if}
-              </div>
-            </article>
-          {/each}
-        </div>
-        {#if todayList.length > 2}
-          <p class="m-0 text-right text-[11px] text-muted-foreground">另有 {todayList.length - 2} 门课程</p>
-        {/if}
-      </div>
-    {:else if timetable.state.phase === "ready"}
-      <div class="flex min-h-24 flex-col items-center justify-center gap-2 rounded-lg bg-muted/40 px-4 py-6 text-center">
-        <CalendarCheck size={19} class="text-primary/80" />
-        <p class="m-0 text-sm font-medium text-foreground">今天没有课程</p>
-        <p class="m-0 text-xs text-muted-foreground">可以放松一下，或提前看看本周安排</p>
-      </div>
-    {:else if timetable.state.phase === "loading" || timetable.state.phase === "idle"}
-      <div class="grid min-h-24 gap-2 rounded-lg bg-muted/40 px-4 py-4">
-        <div class="h-3 w-20 animate-pulse rounded bg-muted"></div>
-        <div class="h-9 animate-pulse rounded-lg bg-muted"></div>
-      </div>
-    {:else if timetable.state.phase === "error"}
-      <div class="flex min-h-24 flex-col items-center justify-center gap-2 rounded-lg bg-muted/40 px-4 py-6 text-center">
-        <CalendarOff size={18} class="text-muted-foreground/70" />
-        <p class="m-0 text-sm font-medium text-foreground">今日日程加载失败</p>
-        <p class="m-0 line-clamp-1 text-xs text-muted-foreground">{timetable.state.message}</p>
-      </div>
+  <div
+    aria-hidden="true"
+    class="pointer-events-none absolute bottom-16 right-6 text-primary/[0.09]"
+  >
+    {#if nightTime}
+      <MoonStar size={92} strokeWidth={1.15} />
     {:else}
-      <div class="flex min-h-24 flex-col items-center justify-center gap-2 rounded-lg bg-muted/40 px-4 py-6 text-center">
-        <CalendarOff size={18} class="text-muted-foreground/70" />
-        <p class="m-0 text-xs text-muted-foreground">登录复旦 UIS 后显示今日日程</p>
-      </div>
+      <Sun size={92} strokeWidth={1.15} />
     {/if}
+  </div>
+
+  <div class="relative mt-auto border-t border-border pt-4">
+    <div class="mb-2.5 flex items-center justify-between text-[11px] text-muted-foreground">
+      <span>这一周</span>
+      <span>星期{weekdayLabels[todayIndex]}</span>
+    </div>
+    <div class="grid grid-cols-7 gap-2" aria-label={`今天是星期${weekdayLabels[todayIndex]}`}>
+      {#each weekdayLabels as label, index}
+        <div class="flex min-w-0 flex-col gap-1.5">
+          <span
+            class={`h-1.5 rounded-full ${index === todayIndex ? "bg-primary" : index < todayIndex ? "bg-primary/25" : "bg-muted"}`}
+          ></span>
+          <span
+            class={`text-center text-[10px] ${index === todayIndex ? "font-semibold text-primary" : "text-muted-foreground/75"}`}
+          >{label}</span>
+        </div>
+      {/each}
+    </div>
   </div>
 </section>

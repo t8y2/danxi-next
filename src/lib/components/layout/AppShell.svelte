@@ -69,6 +69,8 @@
           ? "overflow-hidden pb-15 lg:pb-0"
           : activeSection === "evaluation"
           ? "overflow-y-auto px-4 pb-20 lg:overflow-hidden lg:px-6 lg:pb-6"
+          : activeSection === "overview"
+          ? "overflow-y-auto px-3 pb-20 lg:px-4 lg:pb-0"
           : `overflow-y-auto ${activeSection === "timetable" ? "" : "px-4 pb-20 lg:px-6 lg:pb-8"}`
       }`}
     >

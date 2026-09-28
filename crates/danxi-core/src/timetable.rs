@@ -90,7 +90,7 @@ pub fn parse_jwgl(payload: &Value) -> Result<Timetable, AppError> {
         });
     }
     Ok(Timetable {
-        courses,
+        courses: normalize_courses(courses),
         semester_start_date: None,
     })
 }
@@ -110,8 +110,6 @@ pub fn parse_postgraduate(payload: &Value) -> Result<Timetable, AppError> {
     for record in results {
         let weekday = record.get("XQ").and_then(Value::as_i64).unwrap_or(1) as u8;
         let start_unit = record.get("KSJCDM").and_then(Value::as_i64).unwrap_or(1) as u8;
-        // The upstream sends one record per period; merge consecutive periods
-        // of the same course into one slot for display.
         let weeks = record
             .get("ZCBH")
             .and_then(Value::as_str)
@@ -137,29 +135,131 @@ pub fn parse_postgraduate(payload: &Value) -> Result<Timetable, AppError> {
             end_unit: start_unit,
             weeks,
         };
-        merge_into(&mut courses, course);
+        courses.push(course);
     }
     Ok(Timetable {
-        courses,
+        courses: normalize_courses(courses),
         semester_start_date: None,
     })
 }
 
-/// Merge a single-period slot into the previous one when they continue the
-/// same course on the same day with overlapping weeks.
-fn merge_into(courses: &mut Vec<TimetableCourse>, course: TimetableCourse) {
-    if let Some(last) = courses.last_mut() {
-        if last.course_name == course.course_name
-            && last.weekday == course.weekday
-            && course.start_unit == last.end_unit + 1
-            && last.room_name == course.room_name
-            && last.weeks.iter().any(|week| course.weeks.contains(week))
+fn normalize_courses(mut courses: Vec<TimetableCourse>) -> Vec<TimetableCourse> {
+    for course in &mut courses {
+        course.course_name = course.course_name.trim().to_owned();
+        course.room_name = course
+            .room_name
+            .take()
+            .map(|room| room.trim().to_owned())
+            .filter(|room| !room.is_empty());
+        for teacher in &mut course.teacher_names {
+            *teacher = teacher.trim().to_owned();
+        }
+        course.teacher_names.retain(|teacher| !teacher.is_empty());
+        course.teacher_names.sort();
+        course.teacher_names.dedup();
+        course.weeks.sort_unstable();
+        course.weeks.dedup();
+    }
+
+    courses.sort_by(|left, right| {
+        left.weekday
+            .cmp(&right.weekday)
+            .then_with(|| left.course_name.cmp(&right.course_name))
+            .then_with(|| left.room_name.cmp(&right.room_name))
+            .then_with(|| left.start_unit.cmp(&right.start_unit))
+            .then_with(|| left.end_unit.cmp(&right.end_unit))
+    });
+
+    let mut slots: Vec<TimetableCourse> = Vec::with_capacity(courses.len());
+    for course in courses {
+        if let Some(last) = slots.last_mut()
+            && same_course(last, &course)
+            && last.start_unit == course.start_unit
+            && last.end_unit == course.end_unit
         {
-            last.end_unit = course.end_unit;
-            return;
+            merge_teachers(&mut last.teacher_names, &course.teacher_names);
+            merge_weeks(&mut last.weeks, &course.weeks);
+        } else {
+            slots.push(course);
         }
     }
-    courses.push(course);
+
+    slots.sort_by(|left, right| {
+        left.weekday
+            .cmp(&right.weekday)
+            .then_with(|| left.course_name.cmp(&right.course_name))
+            .then_with(|| left.room_name.cmp(&right.room_name))
+            .then_with(|| left.weeks.cmp(&right.weeks))
+            .then_with(|| left.start_unit.cmp(&right.start_unit))
+            .then_with(|| left.end_unit.cmp(&right.end_unit))
+    });
+
+    let mut merged: Vec<TimetableCourse> = Vec::with_capacity(slots.len());
+    for course in slots {
+        if let Some(last) = merged.last_mut()
+            && same_course(last, &course)
+            && last.weeks == course.weeks
+            && course.start_unit <= last.end_unit.saturating_add(1)
+        {
+            last.end_unit = last.end_unit.max(course.end_unit);
+            merge_teachers(&mut last.teacher_names, &course.teacher_names);
+        } else {
+            merged.push(course);
+        }
+    }
+
+    let mut normalized = Vec::with_capacity(merged.len());
+    for (index, course) in merged.iter().enumerate() {
+        let redundant = merged.iter().enumerate().any(|(other_index, other)| {
+            index != other_index
+                && same_course(course, other)
+                && other.start_unit <= course.start_unit
+                && other.end_unit >= course.end_unit
+                && weeks_cover(&other.weeks, &course.weeks)
+        });
+        if !redundant {
+            normalized.push(course.clone());
+        }
+    }
+
+    normalized.sort_by(|left, right| {
+        left.weekday
+            .cmp(&right.weekday)
+            .then_with(|| left.start_unit.cmp(&right.start_unit))
+            .then_with(|| left.end_unit.cmp(&right.end_unit))
+            .then_with(|| left.course_name.cmp(&right.course_name))
+    });
+    normalized
+}
+
+fn same_course(left: &TimetableCourse, right: &TimetableCourse) -> bool {
+    left.course_name == right.course_name
+        && left.weekday == right.weekday
+        && left.room_name == right.room_name
+}
+
+fn merge_teachers(target: &mut Vec<String>, source: &[String]) {
+    target.extend(source.iter().cloned());
+    target.sort();
+    target.dedup();
+}
+
+fn merge_weeks(target: &mut Vec<u16>, source: &[u16]) {
+    if target.is_empty() || source.is_empty() {
+        target.clear();
+        return;
+    }
+    target.extend_from_slice(source);
+    target.sort_unstable();
+    target.dedup();
+}
+
+fn weeks_cover(superset: &[u16], subset: &[u16]) -> bool {
+    superset.is_empty()
+        || (!subset.is_empty()
+            && subset
+                .iter()
+                .all(|week| superset.binary_search(week).is_ok()))
 }
 
 /// `ZCBH` is one character per week ('1' = has class). The Flutter client
@@ -243,6 +343,33 @@ mod tests {
         assert_eq!(timetable.courses[0].start_unit, 1);
         assert_eq!(timetable.courses[0].end_unit, 3);
         assert_eq!(timetable.courses[0].weeks, vec![1, 2]);
+    }
+
+    #[test]
+    fn merges_overlapping_jwgl_week_patterns() {
+        let payload = json!({
+            "studentTableVms": [{
+                "activities": [
+                    { "courseName": "AI赋能智能制造前沿与实践", "room": "H3105", "teachers": ["李敏波", "王鹏"],
+                      "weekIndexes": [3, 4, 5], "weekday": 2, "startUnit": 8, "endUnit": 8 },
+                    { "courseName": "AI赋能智能制造前沿与实践", "room": "H3105", "teachers": ["李敏波", "王鹏"],
+                      "weekIndexes": [1, 2, 4, 6, 8, 10, 12, 14, 16], "weekday": 2, "startUnit": 8, "endUnit": 8 },
+                    { "courseName": "AI赋能智能制造前沿与实践", "room": "H3105", "teachers": ["李敏波", "王鹏"],
+                      "weekIndexes": [1, 2, 4, 6, 8, 10, 12, 14, 16], "weekday": 2, "startUnit": 9, "endUnit": 9 },
+                    { "courseName": "AI赋能智能制造前沿与实践", "room": "H3105", "teachers": ["李敏波", "王鹏"],
+                      "weekIndexes": [3, 4, 5], "weekday": 2, "startUnit": 9, "endUnit": 9 }
+                ]
+            }]
+        });
+
+        let timetable = parse_jwgl(&payload).unwrap();
+        assert_eq!(timetable.courses.len(), 1);
+        assert_eq!(timetable.courses[0].start_unit, 8);
+        assert_eq!(timetable.courses[0].end_unit, 9);
+        assert_eq!(
+            timetable.courses[0].weeks,
+            vec![1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 16]
+        );
     }
 
     #[test]

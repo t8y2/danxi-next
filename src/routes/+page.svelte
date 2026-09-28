@@ -32,7 +32,7 @@
 
 <AppShell {activeSection} onSelect={(section) => (activeSection = section)}>
   {#if activeSection === "overview"}
-    <div class="grid gap-4 py-4 lg:grid-cols-2 lg:gap-5 lg:py-5">
+    <div class="grid gap-3 py-3 lg:grid-cols-2 lg:gap-4 lg:py-4">
       <div>
         <HeroPanel onLogin={() => openLogin("community")} />
       </div>

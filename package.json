@@ -1,6 +1,6 @@
 {
   "name": "danxi-next",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A maintainable web and desktop client for DanXi, built with Tauri and Svelte.",
   "repository": {
     "type": "git",

@@ -26,12 +26,9 @@
   let order = $state<"time_updated" | "time_created">("time_updated");
   let listViewport = $state<HTMLDivElement>();
   let threadViewport = $state<HTMLDivElement>();
-  let listScrollTop = $state(0);
   let listViewportHeight = $state(640);
 
-  const listRowHeight = 156;
-  const listOverscan = 4;
-  const listFooterHeight = 56;
+  const listLoadThreshold = 360;
   const tagTones = [
     "border-amber-500/20 bg-amber-500/12 text-amber-800 dark:text-amber-300",
     "border-teal-500/20 bg-teal-500/12 text-teal-800 dark:text-teal-300",
@@ -41,23 +38,10 @@
   ] as const;
 
   const holes = $derived(forum.state.phase === "ready" ? forum.state.holes : []);
-  const compactItems = $derived(holes.slice(0, 3));
-  const virtualStart = $derived(
-    Math.max(0, Math.floor(listScrollTop / listRowHeight) - listOverscan),
-  );
-  const virtualEnd = $derived(
-    Math.min(
-      holes.length,
-      virtualStart + Math.ceil(listViewportHeight / listRowHeight) + listOverscan * 2,
-    ),
-  );
-  const virtualHoles = $derived(holes.slice(virtualStart, virtualEnd));
+  const compactItems = $derived(holes.slice(0, 9));
   const showListFooter = $derived(
     forum.state.phase === "ready" &&
-      (forum.state.loadingMore || forum.state.moreError !== null || forum.state.hasMore),
-  );
-  const virtualContentHeight = $derived(
-    holes.length * listRowHeight + (showListFooter ? listFooterHeight : 0),
+      (forum.state.loadingMore || forum.state.moreError !== null),
   );
   const selectedHoleId = $derived(
     forum.detail.phase === "idle" ? null : forum.detail.phase === "ready"
@@ -135,7 +119,8 @@
       forum.state.hasMore &&
       !forum.state.loadingMore &&
       !forum.state.moreError &&
-      holes.length * listRowHeight < listViewportHeight + listRowHeight * 2
+      listViewport &&
+      listViewport.scrollHeight < listViewportHeight + listLoadThreshold
     ) {
       void forum.loadMoreHoles();
     }
@@ -152,22 +137,19 @@
   function selectOrder(next: "time_updated" | "time_created") {
     if (order === next) return;
     order = next;
-    listScrollTop = 0;
     if (listViewport) listViewport.scrollTop = 0;
     void forum.load(10, next);
   }
 
   function reloadList() {
-    listScrollTop = 0;
     if (listViewport) listViewport.scrollTop = 0;
     void forum.load(10, order);
   }
 
   function handleListScroll(event: Event) {
     const element = event.currentTarget as HTMLDivElement;
-    listScrollTop = element.scrollTop;
     listViewportHeight = element.clientHeight;
-    if (element.scrollHeight - element.scrollTop - element.clientHeight < listRowHeight * 3) {
+    if (element.scrollHeight - element.scrollTop - element.clientHeight < listLoadThreshold) {
       void forum.loadMoreHoles();
     }
   }
@@ -310,18 +292,17 @@
               class="min-h-0 flex-1 overflow-y-auto overscroll-contain"
               onscroll={handleListScroll}
             >
-              <div class="relative" style={`height: ${virtualContentHeight}px`}>
-                {#each virtualHoles as hole, index (hole.holeId)}
+              <div>
+                {#each holes as hole (hole.holeId)}
                   {@const isSelected = selectedHoleId === hole.holeId}
                   <button
                     type="button"
                     aria-current={isSelected ? "true" : undefined}
-                    class={`focus-ring group absolute inset-x-0 flex w-full flex-col overflow-hidden border-b border-border px-4 py-4 text-left transition-colors ${
+                    class={`forum-list-item focus-ring group relative flex w-full flex-col overflow-hidden border-b border-border px-4 py-3.5 text-left transition-colors ${
                       isSelected
                         ? "bg-primary/[0.11] hover:bg-primary/[0.11]"
                         : "bg-card hover:bg-muted/55"
                     }`}
-                    style={`top: ${(virtualStart + index) * listRowHeight}px; height: ${listRowHeight}px`}
                     onclick={() => selectHole(hole.holeId)}
                   >
                     <span
@@ -351,7 +332,7 @@
                       {excerpt(hole)}
                     </p>
                     <div
-                      class="mt-auto flex shrink-0 items-center gap-3 pt-2.5 text-[11px] text-muted-foreground"
+                      class="mt-2.5 flex shrink-0 items-center gap-3 text-[11px] text-muted-foreground"
                     >
                       <span class="flex items-center gap-1"
                         ><MessageCircle size={12} />{hole.reply}</span
@@ -367,10 +348,7 @@
                   </button>
                 {/each}
                 {#if showListFooter && forum.state.phase === "ready"}
-                  <div
-                    class="absolute inset-x-0 flex items-center justify-center border-t border-border text-xs text-muted-foreground"
-                    style={`top: ${holes.length * listRowHeight}px; height: ${listFooterHeight}px`}
-                  >
+                  <div class="flex h-12 items-center justify-center border-t border-border text-xs text-muted-foreground">
                     {#if forum.state.loadingMore}
                       <span class="flex items-center gap-2">
                         <LoaderCircle class="animate-spin" size={13} /> 加载更多讨论
@@ -475,11 +453,11 @@
               class="selectable min-h-0 flex-1 overflow-y-auto overscroll-contain"
               onscroll={handleThreadScroll}
             >
-              <article class="px-5 py-6 lg:px-8 lg:py-8">
+              <article class="px-5 py-4 lg:px-6 lg:py-5">
                 {#if firstFloor}
-                  <header class="flex items-center gap-3">
+                  <header class="flex items-center gap-2.5">
                     <span
-                      class="grid size-9 shrink-0 place-items-center rounded-full bg-primary/9 text-sm font-semibold text-primary"
+                      class="grid size-8 shrink-0 place-items-center rounded-full bg-primary/9 text-xs font-semibold text-primary"
                     >
                       {authorMark(firstFloor.anonyname)}
                     </span>
@@ -498,24 +476,24 @@
                     </div>
                   </header>
                   <p
-                    class="mb-0 mt-5 whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground"
+                    class="mb-0 mt-3 whitespace-pre-wrap break-words text-[15px] leading-6 text-foreground"
                   >{firstFloor.content}</p>
                 {:else}
-                  <p class="m-0 py-8 text-sm text-muted-foreground">主题内容暂不可见</p>
+                  <p class="m-0 py-6 text-sm text-muted-foreground">主题内容暂不可见</p>
                 {/if}
               </article>
 
               <div class="border-t border-border">
-                <div class="flex h-12 items-center px-5 lg:px-8">
+                <div class="flex h-10 items-center px-5 lg:px-6">
                   <span class="text-xs font-semibold text-foreground">回复</span>
                   <span class="ml-2 text-xs tabular-nums text-muted-foreground">{thread.hole.reply}</span>
                 </div>
 
                 {#each replies as floor, index (floor.floorId)}
-                  <article class="virtual-floor border-t border-border px-5 py-5 lg:px-8 lg:py-6">
-                    <header class="flex items-start gap-3">
+                  <article class="virtual-floor border-t border-border px-5 py-3.5 lg:px-6 lg:py-4">
+                    <header class="flex items-start gap-2.5">
                       <span
-                        class="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-xs font-semibold text-muted-foreground"
+                        class="grid size-7 shrink-0 place-items-center rounded-full bg-muted text-[11px] font-semibold text-muted-foreground"
                       >
                         {authorMark(floor.anonyname)}
                       </span>
@@ -543,17 +521,17 @@
                       </div>
                     </header>
                     {#if floor.fold.length > 0}
-                      <p class="mb-0 mt-4 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
+                      <p class="mb-0 mt-2.5 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
                         {floor.fold.join(" · ")}
                       </p>
                     {/if}
                     <p
-                      class={`mb-0 mt-4 whitespace-pre-wrap break-words text-[14px] leading-6 ${
+                      class={`mb-0 mt-2.5 whitespace-pre-wrap break-words text-[14px] leading-5 ${
                         floor.deleted ? "text-muted-foreground" : "text-foreground/92"
                       }`}
                     >{floor.content}</p>
                     {#if floor.like > 0 || floor.dislike > 0}
-                      <footer class="mt-4 flex items-center gap-3 text-[11px] text-muted-foreground">
+                      <footer class="mt-2.5 flex items-center gap-3 text-[11px] text-muted-foreground">
                         {#if floor.like > 0}
                           <span class={`flex items-center gap-1 ${floor.liked ? "text-primary" : ""}`}>
                             <Heart size={12} fill={floor.liked ? "currentColor" : "none"} />{floor.like}
@@ -591,27 +569,29 @@
     {/if}
   </section>
 {:else}
-  <section class="flex h-full flex-col rounded-xl border border-border bg-card p-5">
-    <div class="mb-3 flex items-center justify-between">
-      <h2 class="m-0 text-[16px] font-semibold tracking-[-0.015em]">茶楼动态</h2>
+  <section class="flex h-full flex-col overflow-hidden rounded-xl border border-border bg-card">
+    <div class="flex h-11 shrink-0 items-center justify-between border-b border-border px-4">
+      <h2 class="m-0 text-[15px] font-semibold tracking-[-0.015em]">茶楼动态</h2>
       {#if forum.state.phase === "ready"}
-        <Button variant="ghost" size="sm" class="text-muted-foreground" onclick={() => onOpenForum?.()}>
+        <Button variant="ghost" size="sm" class="h-7 px-2 text-muted-foreground" onclick={() => onOpenForum?.()}>
           全部 <ArrowRight size={14} />
         </Button>
       {/if}
     </div>
 
     {#if forum.state.phase === "loading" || forum.state.phase === "idle"}
-      <div class="grid flex-1 grid-rows-3 border-t border-border">
-        {#each Array(3) as _}
-          <div class="flex flex-col justify-center gap-2 border-b border-border py-3 last:border-b-0">
+      <div class="grid flex-1 px-4 md:grid-cols-3">
+        {#each Array(9) as _, index}
+          <div
+            class={`flex flex-col justify-center gap-2 border-b border-border py-3 last:border-b-0 md:border-b-0 md:px-4 ${index >= 3 ? "md:border-t" : ""} ${index % 3 !== 0 ? "md:border-l" : "md:pl-0"} ${index % 3 === 2 ? "md:pr-0" : ""}`}
+          >
             <div class="h-3 w-24 animate-pulse rounded bg-muted"></div>
             <div class="h-3.5 w-4/5 animate-pulse rounded bg-muted"></div>
           </div>
         {/each}
       </div>
     {:else if forum.state.phase === "unauthenticated"}
-      <div class="flex flex-1 items-center gap-3 rounded-lg bg-muted/45 px-4 py-5">
+      <div class="m-3 flex flex-1 items-center gap-3 rounded-lg bg-muted/45 px-4 py-4">
         <span class="grid size-10 shrink-0 place-items-center rounded-lg bg-card text-primary">
           <MessageCircle size={18} strokeWidth={1.8} />
         </span>
@@ -622,18 +602,18 @@
         <Button size="sm" onclick={onLogin}><LogIn size={14} /> 登录</Button>
       </div>
     {:else if forum.state.phase === "error"}
-      <div class="flex flex-1 flex-col items-center justify-center gap-3 py-10 text-muted-foreground">
+      <div class="flex flex-1 flex-col items-center justify-center gap-3 px-4 py-8 text-muted-foreground">
         <p class="m-0 text-sm">{forum.state.message}</p>
         <Button variant="outline" size="sm" onclick={() => forum.load(10, order)}>
           <RefreshCw size={14} /> 重试
         </Button>
       </div>
     {:else}
-      <div class="grid flex-1 grid-rows-3 border-t border-border">
-        {#each compactItems as hole (hole.holeId)}
+      <div class="grid flex-1 px-4 md:grid-cols-3">
+        {#each compactItems as hole, index (hole.holeId)}
           <button
             type="button"
-            class="focus-ring group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-border py-3 text-left last:border-b-0"
+            class={`focus-ring group grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 border-b border-border py-3 text-left last:border-b-0 md:border-b-0 md:px-4 ${index >= 3 ? "md:border-t" : ""} ${index % 3 !== 0 ? "md:border-l" : "md:pl-0"} ${index % 3 === 2 ? "md:pr-0" : ""}`}
             onclick={() => selectHole(hole.holeId)}
           >
             <div class="min-w-0">
@@ -663,7 +643,7 @@
           </button>
         {/each}
         {#if compactItems.length === 0}
-          <p class="m-0 py-8 text-center text-sm text-muted-foreground">暂无讨论</p>
+          <p class="m-0 py-8 text-center text-sm text-muted-foreground md:col-span-3">暂无讨论</p>
         {/if}
       </div>
     {/if}
@@ -671,8 +651,9 @@
 {/if}
 
 <style>
+  .forum-list-item,
   .virtual-floor {
     content-visibility: auto;
-    contain-intrinsic-size: auto 180px;
+    contain-intrinsic-size: auto 112px;
   }
 </style>

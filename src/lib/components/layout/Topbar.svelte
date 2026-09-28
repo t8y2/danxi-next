@@ -1,10 +1,8 @@
 <script lang="ts">
-  import Bell from "@lucide/svelte/icons/bell";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import Minus from "@lucide/svelte/icons/minus";
   import Moon from "@lucide/svelte/icons/moon";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
-  import Search from "@lucide/svelte/icons/search";
   import Square from "@lucide/svelte/icons/square";
   import Sun from "@lucide/svelte/icons/sun";
   import X from "@lucide/svelte/icons/x";
@@ -144,12 +142,6 @@
       {:else}
         <Moon size={16} />
       {/if}
-    </Button>
-    <Button variant="ghost" size="icon" class="size-8" aria-label="搜索">
-      <Search size={16} />
-    </Button>
-    <Button variant="ghost" size="icon" class="size-8" aria-label="通知">
-      <Bell size={16} />
     </Button>
     {#if desktopWindow.available && !isMacOS}
       <div class="ml-2 flex h-full items-stretch border-l border-border">
