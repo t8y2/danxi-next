@@ -23,7 +23,7 @@
     "release:check": "node scripts/check-release-version.mjs",
     "tauri": "tauri"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "@lucide/svelte": "^1.48.0",
     "@tauri-apps/api": "^2",

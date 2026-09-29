@@ -63,3 +63,7 @@ Svelte UI → runtime transport ┬→ Tauri invoke ─┐
 ```
 
 前端不直接持有密码、Cookie 或长期 Token。真实接口方案见 `docs/api-integration.md`，迁移计划见 `docs/migration-plan.md`，Web 部署说明见 `docs/web-deployment.md`。
+
+## 许可证
+
+本项目采用 Apache License 2.0，详见 [LICENSE](LICENSE)。

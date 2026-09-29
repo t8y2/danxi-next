@@ -3,6 +3,7 @@ name = "danxi-core"
 version = "0.1.0"
 edition = "2024"
 description = "Shared application services for DanXi Next web and desktop runtimes"
+license = "Apache-2.0"
 
 [dependencies]
 aes = "0.8"
