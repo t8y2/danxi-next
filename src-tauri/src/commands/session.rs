@@ -1,18 +1,43 @@
 use danxi_core::{
-    AppError, CampusBus, CampusLifeService, CampusLocation, CampusLoginResult, CampusSession,
-    DiningCrowdedness, EmptyClassroom, EvaluationCourseDetail, EvaluationCourseGroup,
-    EvaluationReview, ForumHole, ForumThreadPage, HoleSortOrder, LibraryOccupancy, SessionManager,
-    SessionStatus,
+    AppError, CampusBus, CampusCredentials, CampusLifeService, CampusLocation, CampusLoginResult,
+    CampusSession, CampusStatus, DiningCrowdedness, EmptyClassroom, EvaluationCourseDetail,
+    EvaluationCourseGroup, EvaluationReview, ForumHole, ForumThreadPage, HoleSortOrder,
+    LibraryOccupancy, SessionManager, SessionStatus,
 };
 use serde::Deserialize;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder, webview::PageLoadEvent};
+use tauri::{
+    AppHandle, Manager, State, Url, WebviewUrl, WebviewWindowBuilder, webview::PageLoadEvent,
+};
 
 const DINING_URL: &str = "https://my.fudan.edu.cn/simple_list/stqk";
-const ENHANCED_AUTH_WINDOW_LABEL: &str = "campus-enhanced-auth";
+const CAMPUS_LOGIN_AUTH_WINDOW_LABEL: &str = "campus-login-second-factor";
+const DINING_AUTH_WINDOW_LABEL: &str = "campus-dining-enhanced-auth";
+
+#[derive(Clone, Copy)]
+enum EnhancedAuthPurpose {
+    CampusLogin { generation: u64 },
+    Dining,
+}
+
+impl EnhancedAuthPurpose {
+    fn window_label(self) -> &'static str {
+        match self {
+            Self::CampusLogin { .. } => CAMPUS_LOGIN_AUTH_WINDOW_LABEL,
+            Self::Dining => DINING_AUTH_WINDOW_LABEL,
+        }
+    }
+
+    fn missing_cookie_message(self) -> &'static str {
+        match self {
+            Self::CampusLogin { .. } => "未读取到教务系统登录状态",
+            Self::Dining => "未读取到食堂服务登录状态",
+        }
+    }
+}
 
 #[tauri::command]
 pub async fn community_login(
@@ -161,19 +186,66 @@ pub async fn load_dining_crowdedness(
 }
 
 #[tauri::command]
+pub async fn complete_campus_second_factor(
+    app: AppHandle,
+    campus: State<'_, CampusSession>,
+) -> Result<CampusStatus, AppError> {
+    let context = campus.second_factor_context().await?;
+    let generation = context.generation;
+    let result = run_enhanced_auth_window(
+        app,
+        context.credentials,
+        context.login_url,
+        context.target_host,
+        context.identity_url,
+        EnhancedAuthPurpose::CampusLogin { generation },
+    )
+    .await;
+    if result.is_err() {
+        campus.cancel_second_factor(generation).await;
+    }
+    result?.ok_or_else(|| AppError::Configuration("校园二次验证未返回登录状态".to_owned()))
+}
+
+#[tauri::command]
 pub async fn begin_dining_enhanced_auth(
     app: AppHandle,
     campus: State<'_, CampusSession>,
 ) -> Result<(), AppError> {
-    if let Some(window) = app.get_webview_window(ENHANCED_AUTH_WINDOW_LABEL) {
-        let _ = window.close();
+    let credentials = campus.credentials_for_enhanced_auth()?;
+    let (login_url, target_host, identity_url) = campus.enhanced_auth_context(DINING_URL).await?;
+    run_enhanced_auth_window(
+        app,
+        credentials,
+        login_url,
+        target_host,
+        identity_url,
+        EnhancedAuthPurpose::Dining,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn run_enhanced_auth_window(
+    app: AppHandle,
+    credentials: CampusCredentials,
+    login_url: String,
+    target_host: String,
+    identity_url: String,
+    purpose: EnhancedAuthPurpose,
+) -> Result<Option<CampusStatus>, AppError> {
+    if let Some(window) = app.get_webview_window(purpose.window_label()) {
+        let _ = window.set_focus();
+        return Err(AppError::Configuration("复旦双因素认证正在进行".to_owned()));
     }
 
-    let credentials = campus.credentials_for_enhanced_auth()?;
-    let (login_url, target_host) = campus.enhanced_auth_context(DINING_URL).await?;
     let external_url = login_url
         .parse()
         .map_err(|_| AppError::Configuration("双因素认证地址无效".to_owned()))?;
+    let identity_host = Url::parse(&identity_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .ok_or_else(|| AppError::Configuration("统一认证地址无效".to_owned()))?;
     let username = serde_json::to_string(&credentials.id)
         .map_err(|error| AppError::Configuration(error.to_string()))?;
     let password = serde_json::to_string(&credentials.password)
@@ -193,11 +265,14 @@ pub async fn begin_dining_enhanced_auth(
         }}, 800);"#
     );
 
-    let (sender, receiver) = tokio::sync::oneshot::channel::<Result<(), AppError>>();
+    let (sender, receiver) =
+        tokio::sync::oneshot::channel::<Result<Option<CampusStatus>, AppError>>();
     let sender = Arc::new(Mutex::new(Some(sender)));
     let completed = Arc::new(AtomicBool::new(false));
     let app_for_load = app.clone();
     let target_host_for_load = target_host.clone();
+    let identity_host_for_load = identity_host.clone();
+    let identity_url_for_load = identity_url.clone();
     let sender_for_load = sender.clone();
     let completed_for_load = completed.clone();
     let autofill_done = Arc::new(AtomicBool::new(false));
@@ -205,7 +280,7 @@ pub async fn begin_dining_enhanced_auth(
 
     let window = WebviewWindowBuilder::new(
         &app,
-        ENHANCED_AUTH_WINDOW_LABEL,
+        purpose.window_label(),
         WebviewUrl::External(external_url),
     )
     .title("复旦双因素认证")
@@ -217,7 +292,7 @@ pub async fn begin_dining_enhanced_auth(
             return;
         }
         let url = payload.url();
-        if url.host_str() == Some("id.fudan.edu.cn")
+        if url.host_str() == Some(identity_host_for_load.as_str())
             && !autofill_done_for_load.swap(true, Ordering::AcqRel)
         {
             let _ = webview.eval(autofill_script.clone());
@@ -232,16 +307,17 @@ pub async fn begin_dining_enhanced_auth(
         let target_url = url.clone();
         let app = app_for_load.clone();
         let sender = sender_for_load.clone();
+        let identity_url = identity_url_for_load.clone();
         std::thread::spawn(move || {
-            let result = (|| -> Result<(), AppError> {
+            let result = (|| -> Result<Option<CampusStatus>, AppError> {
                 let target_cookies = webview
                     .cookies_for_url(target_url.clone())
                     .map_err(|error| AppError::Storage(error.to_string()))?;
-                let identity_url = "https://id.fudan.edu.cn/"
+                let parsed_identity_url = identity_url
                     .parse()
                     .map_err(|_| AppError::Configuration("统一认证地址无效".to_owned()))?;
                 let identity_cookies = webview
-                    .cookies_for_url(identity_url)
+                    .cookies_for_url(parsed_identity_url)
                     .map_err(|error| AppError::Storage(error.to_string()))?;
                 let target_headers = target_cookies
                     .into_iter()
@@ -252,17 +328,31 @@ pub async fn begin_dining_enhanced_auth(
                     .map(|cookie| cookie.to_string())
                     .collect::<Vec<_>>();
                 if target_headers.is_empty() {
-                    return Err(AppError::Auth("未读取到食堂服务登录状态".to_owned()));
+                    return Err(AppError::Auth(purpose.missing_cookie_message().to_owned()));
                 }
 
                 let campus = app.state::<CampusSession>();
                 tauri::async_runtime::block_on(async {
-                    campus
-                        .import_enhanced_auth_cookies(target_url.as_str(), &target_headers)
-                        .await?;
-                    campus
-                        .import_enhanced_auth_cookies("https://id.fudan.edu.cn/", &identity_headers)
-                        .await
+                    match purpose {
+                        EnhancedAuthPurpose::CampusLogin { generation } => campus
+                            .complete_second_factor(
+                                generation,
+                                target_url.as_str(),
+                                &target_headers,
+                                &identity_headers,
+                            )
+                            .await
+                            .map(Some),
+                        EnhancedAuthPurpose::Dining => {
+                            campus
+                                .import_enhanced_auth_cookies(target_url.as_str(), &target_headers)
+                                .await?;
+                            campus
+                                .import_enhanced_auth_cookies(&identity_url, &identity_headers)
+                                .await?;
+                            Ok(None)
+                        }
+                    }
                 })
             })();
             if let Ok(mut slot) = sender.lock()

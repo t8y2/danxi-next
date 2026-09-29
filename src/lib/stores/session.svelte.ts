@@ -139,6 +139,20 @@ export class SessionStore {
     return result;
   }
 
+  async completeCampusSecondFactor() {
+    const request = ++this.#campusMutation;
+    this.#refreshRequest += 1;
+    const status = await backend.completeCampusSecondFactor();
+    if (request !== this.#campusMutation) return status;
+    this.#setStatus({
+      ...this.status,
+      campusLoggedIn: status.loggedIn,
+      campusId: status.id,
+      campusName: status.name,
+    });
+    return status;
+  }
+
   async logoutCampus() {
     const request = ++this.#campusMutation;
     this.#refreshRequest += 1;

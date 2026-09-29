@@ -131,7 +131,7 @@
         campusPassword = "";
         if (result.state === "requiresSecondFactor") {
           notice = result.message;
-          return;
+          await session.completeCampusSecondFactor();
         }
       } else if (isRegistering) {
         await session.register(email.trim(), password, verifyCode.trim());
@@ -143,6 +143,7 @@
       }
       onClose();
     } catch (raw) {
+      notice = "";
       error = toTransportError(raw).message;
     } finally {
       busy = false;

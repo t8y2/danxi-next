@@ -31,6 +31,7 @@ pub fn run() {
             commands::session::community_send_verify_code,
             commands::session::community_logout,
             commands::session::campus_login,
+            commands::session::complete_campus_second_factor,
             commands::session::campus_logout,
             commands::session::load_timetable,
             commands::session::load_library_occupancy,

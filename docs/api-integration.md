@@ -11,7 +11,7 @@
 - 茶楼列表：`GET /v1/forum/holes`（桌面端 `load_forum_holes`），在 Rust 层附加 Bearer Token，并在 401 时自动用 Refresh Token 换新后重试一次。
 - 评教：随机评价、课程搜索与课程评价详情均通过 Rust 侧访问旦课 API，共享旦挞 Token，并支持自动 WebVPN。
 - 校园服务：图书馆人数公开读取；食堂拥挤度、校车时刻和空教室通过 Rust 侧复用复旦 UIS 会话，空教室在校外自动回退 WebVPN。
-- 复旦校园登录（id.fudan.edu.cn，即原 UIS 的继任系统）：`POST /v1/session/campus/login`、`POST /v1/session/campus/logout`。完整复刻 Flutter 客户端 V2 密码流程：authenticate 重定向取 `lck`/`entityId` → `queryAuthMethods` → `getJsPublicKey` → RSA 加密密码 `authExecute`。需要二次验证时返回结构化 `requiresSecondFactor` 状态，不再伪装成普通密码错误。
+- 复旦校园登录（id.fudan.edu.cn，即原 UIS 的继任系统）：`POST /v1/session/campus/login`、`POST /v1/session/campus/logout`。完整复刻 Flutter 客户端 V2 密码流程：authenticate 重定向取 `lck`/`entityId` → `queryAuthMethods` → `getJsPublicKey` → RSA 加密密码 `authExecute`。需要二次验证时返回结构化 `requiresSecondFactor` 状态；桌面端随后调用 `complete_campus_second_factor` 打开内嵌认证窗口，完成后导入教务与统一认证 Cookie、验证目标会话并保存凭证。浏览器版受跨域 HttpOnly Cookie 隔离限制，当前会明确提示改用桌面客户端。
 - 桌面端社区 Token 与校园凭证使用 AES-256-GCM 加密文件保存，并自动迁移旧版明文 `secrets.json`；未重新使用系统钥匙串。Web 端凭证仅存在服务端会话内存中。
 - 应用启动时先从前端公开状态快照恢复登录 UI，再调用本地状态接口并在后台校验真实会话，网络抖动不会阻塞首屏登录态。
 
@@ -67,7 +67,7 @@ WebTransport   → GET /v1/campus/timetable
 2. ~~社区登录：`POST /api/login`，并实现 `POST /api/refresh` 自动刷新。~~ 已完成（`danxi-core::forum::SessionManager`）。
 3. ~~树洞列表：`GET /api/holes`，仅在 Rust 层附加 Bearer Token。~~ 已完成。
 4. ~~旦课搜索：`GET /api/v3/course_groups/search`，复用社区 Token。~~ 已完成，并已接入课程详情与随机评价。
-5. ~~复旦认证登录：独立 Cookie Jar，并自动识别本科生或研究生课表系统。~~ 密码登录已完成（`danxi-core::campus`，新版 id.fudan.edu.cn 流程）。课表、图书馆人数、食堂拥挤度、校车时刻与空教室均已接入；完整二次验证流程仍待实现。
+5. ~~复旦认证登录：独立 Cookie Jar，并自动识别本科生或研究生课表系统。~~ 密码登录与桌面端二次验证续接已完成（`danxi-core::campus`，新版 id.fudan.edu.cn 流程）。课表、图书馆人数、食堂拥挤度、校车时刻与空教室均已接入；Web 网关二次验证仍需可回调的服务端认证方案。
 
 ## 本地代理
 

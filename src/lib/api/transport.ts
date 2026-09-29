@@ -4,6 +4,7 @@ import type {
   CampusBus,
   CampusLoginResult,
   CampusLocation,
+  CampusStatus,
   DiningCrowdedness,
   EmptyClassroom,
   EvaluationCourseDetail,
@@ -35,6 +36,7 @@ export interface BackendTransport {
   checkEmailRegistered(email: string, options?: CommunityNetworkOptions): Promise<boolean>;
   sendVerificationCode(email: string, options?: CommunityNetworkOptions): Promise<void>;
   campusLogin(id: string, password: string): Promise<CampusLoginResult>;
+  completeCampusSecondFactor(): Promise<CampusStatus>;
   campusLogout(): Promise<void>;
   loadTimetable(): Promise<Timetable>;
   loadLibraryOccupancy(): Promise<LibraryOccupancy[]>;
@@ -139,6 +141,10 @@ class TauriTransport implements BackendTransport {
 
   campusLogin(id: string, password: string) {
     return invoke<CampusLoginResult>("campus_login", { request: { id, password } });
+  }
+
+  completeCampusSecondFactor() {
+    return invoke<CampusStatus>("complete_campus_second_factor");
   }
 
   loadTimetable() {
@@ -270,6 +276,12 @@ class WebTransport implements BackendTransport {
 
   campusLogin(id: string, password: string) {
     return this.post<CampusLoginResult>("/v1/session/campus/login", { id, password });
+  }
+
+  completeCampusSecondFactor(): Promise<CampusStatus> {
+    return Promise.reject(
+      new TransportError("浏览器版暂不支持复旦双因素认证，请使用桌面客户端", "unsupported"),
+    );
   }
 
   loadTimetable() {
@@ -457,6 +469,10 @@ class PreviewTransport implements BackendTransport {
 
   campusLogin(_id: string, _password: string): Promise<CampusLoginResult> {
     return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
+  }
+
+  completeCampusSecondFactor(): Promise<CampusStatus> {
+    return Promise.reject(new TransportError("预览模式下不可用，请启动桌面客户端", "unsupported"));
   }
 
   loadTimetable(): Promise<Timetable> {

@@ -376,17 +376,26 @@ async fn campus_login(
         .login(&body.id, &body.password, body.is_graduate)
         .await
     {
-        Ok(status) => match authenticated_session_id(&state, session_id, web_session, created) {
-            Ok(session_id) => (
-                [(
-                    header::SET_COOKIE,
-                    session_cookie_header(&session_id, state.secure_cookies),
-                )],
-                Json(status),
-            )
-                .into_response(),
-            Err(error) => error_response(&error),
-        },
+        Ok(status @ danxi_core::CampusLoginResult::Authenticated { .. }) => {
+            match authenticated_session_id(&state, session_id, web_session, created) {
+                Ok(session_id) => (
+                    [(
+                        header::SET_COOKIE,
+                        session_cookie_header(&session_id, state.secure_cookies),
+                    )],
+                    Json(status),
+                )
+                    .into_response(),
+                Err(error) => error_response(&error),
+            }
+        }
+        Ok(status @ danxi_core::CampusLoginResult::RequiresSecondFactor { .. }) => {
+            campus.clear_pending_second_factor().await;
+            if created {
+                state.sessions.remove(Some(&session_id));
+            }
+            Json(status).into_response()
+        }
         Err(error) => {
             if created {
                 state.sessions.remove(Some(&session_id));

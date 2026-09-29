@@ -3,7 +3,7 @@ use std::{
     env,
     sync::{
         Arc, RwLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -21,7 +21,7 @@ const DEFAULT_AUTH_SERVICE: &str = "https://fdjwgl.fudan.edu.cn/student/sso/logi
 const EHALL_PROFILE_URL: &str = "https://ehall.fudan.edu.cn/manage/common/login/index?redirect=https%3A%2F%2Fehall.fudan.edu.cn";
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36";
 const DIRECT_ROUTE_CACHE_TTL: Duration = Duration::from_secs(60);
-const SECOND_FACTOR_MESSAGE: &str = "该账户需要二次验证，请先在复旦统一身份认证网页完成验证后重试";
+const SECOND_FACTOR_MESSAGE: &str = "该账户需要二次验证，请在弹出的复旦统一身份认证窗口中完成验证";
 
 #[derive(Clone, Copy)]
 struct DirectRoute {
@@ -59,10 +59,33 @@ pub enum CampusLoginResult {
     RequiresSecondFactor { message: String },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CampusAuthenticationResult {
     Authenticated,
-    RequiresSecondFactor,
+    RequiresSecondFactor {
+        login_url: String,
+        target_host: String,
+        identity_url: String,
+    },
+}
+
+#[derive(Clone)]
+pub struct CampusSecondFactorContext {
+    pub generation: u64,
+    pub credentials: CampusCredentials,
+    pub login_url: String,
+    pub target_host: String,
+    pub identity_url: String,
+}
+
+#[derive(Clone)]
+struct PendingCampusLogin {
+    generation: u64,
+    credentials: CampusCredentials,
+    service: Arc<CampusService>,
+    login_url: String,
+    target_host: String,
+    identity_url: String,
 }
 
 enum AuthMethodSelection {
@@ -144,10 +167,10 @@ impl CampusService {
         id: &str,
         password: &str,
     ) -> Result<CampusAuthenticationResult, AppError> {
-        let (lck, entity_id) = self.authentication_context().await?;
+        let (login_url, lck, entity_id) = self.authentication_context().await?;
         let AuthMethodSelection::Password(chain_code) = self.auth_method(&lck, &entity_id).await?
         else {
-            return Ok(CampusAuthenticationResult::RequiresSecondFactor);
+            return self.second_factor_result(&login_url);
         };
         let public_key = self.public_key().await?;
         let encrypted = encrypt_password(&public_key, password)?;
@@ -178,12 +201,10 @@ impl CampusService {
             .json()
             .await
             .map_err(|_| AppError::Upstream("认证响应格式无法解析".to_owned()))?;
-        auth_execute_error(&body)?;
+        let Some(login_token) = auth_execute_login_token(&body)? else {
+            return self.second_factor_result(&login_url);
+        };
         // Exchange the login token for a ticket-issuing SSO session.
-        let login_token = body
-            .get("loginToken")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AppError::Auth("认证失败：服务未颁发会话".to_owned()))?;
         let response = self
             .http
             .post(format!(
@@ -200,9 +221,20 @@ impl CampusService {
         Ok(CampusAuthenticationResult::Authenticated)
     }
 
+    fn second_factor_result(
+        &self,
+        login_url: &reqwest::Url,
+    ) -> Result<CampusAuthenticationResult, AppError> {
+        Ok(CampusAuthenticationResult::RequiresSecondFactor {
+            target_host: host_of(&self.service)?,
+            login_url: login_url.to_string(),
+            identity_url: format!("https://{}/", self.id_host),
+        })
+    }
+
     /// Follow the authenticate redirect and pull `lck`/`entityId` out of the
     /// `#/index?lck=…&entityId=…` fragment.
-    async fn authentication_context(&self) -> Result<(String, String), AppError> {
+    async fn authentication_context(&self) -> Result<(reqwest::Url, String, String), AppError> {
         let location = self.authentication_url(&self.service).await?;
         let fragment = location
             .fragment()
@@ -223,7 +255,7 @@ impl CampusService {
         }
         match (lck, entity_id) {
             (Some(lck), Some(entity_id)) if !lck.is_empty() && !entity_id.is_empty() => {
-                Ok((lck, entity_id))
+                Ok((location, lck, entity_id))
             }
             _ => Err(AppError::Upstream("认证跳转缺少会话参数".to_owned())),
         }
@@ -599,6 +631,8 @@ impl CampusService {
 pub struct CampusSession {
     store: Arc<dyn CampusCredentialStore>,
     service: tokio::sync::Mutex<Option<Arc<CampusService>>>,
+    pending_login: tokio::sync::Mutex<Option<PendingCampusLogin>>,
+    pending_generation: AtomicU64,
 }
 
 impl CampusSession {
@@ -606,6 +640,8 @@ impl CampusSession {
         Ok(Self {
             store,
             service: tokio::sync::Mutex::new(None),
+            pending_login: tokio::sync::Mutex::new(None),
+            pending_generation: AtomicU64::new(0),
         })
     }
 
@@ -615,27 +651,41 @@ impl CampusSession {
         password: &str,
         is_graduate: bool,
     ) -> Result<CampusLoginResult, AppError> {
-        let mut slot = self.service.lock().await;
         let mut credentials = CampusCredentials {
             id: id.trim().to_owned(),
             password: password.to_owned(),
             name: None,
             is_graduate,
         };
+        self.clear_pending_second_factor().await;
         let service = Arc::new(CampusService::new()?);
-        if matches!(
-            service
-                .login(&credentials.id, &credentials.password)
-                .await?,
-            CampusAuthenticationResult::RequiresSecondFactor
-        ) {
-            return Ok(CampusLoginResult::RequiresSecondFactor {
-                message: SECOND_FACTOR_MESSAGE.to_owned(),
-            });
+        match service
+            .login(&credentials.id, &credentials.password)
+            .await?
+        {
+            CampusAuthenticationResult::Authenticated => {}
+            CampusAuthenticationResult::RequiresSecondFactor {
+                login_url,
+                target_host,
+                identity_url,
+            } => {
+                let generation = self.pending_generation.fetch_add(1, Ordering::AcqRel) + 1;
+                *self.pending_login.lock().await = Some(PendingCampusLogin {
+                    generation,
+                    credentials,
+                    service,
+                    login_url,
+                    target_host,
+                    identity_url,
+                });
+                return Ok(CampusLoginResult::RequiresSecondFactor {
+                    message: SECOND_FACTOR_MESSAGE.to_owned(),
+                });
+            }
         }
         credentials.name = service.fetch_user_name().await.ok();
         self.store.save(&credentials)?;
-        *slot = Some(service);
+        *self.service.lock().await = Some(service);
         Ok(CampusLoginResult::Authenticated {
             status: CampusStatus {
                 logged_in: true,
@@ -693,6 +743,7 @@ impl CampusSession {
         let mut service = self.service.lock().await;
         self.store.clear()?;
         *service = None;
+        self.clear_pending_second_factor().await;
         Ok(())
     }
 
@@ -709,16 +760,90 @@ impl CampusSession {
             .load()?
             .ok_or_else(|| AppError::Auth("尚未登录复旦 UIS".to_owned()))?;
         let service = Arc::new(CampusService::new()?);
-        if matches!(
-            service
-                .login(&credentials.id, &credentials.password)
-                .await?,
-            CampusAuthenticationResult::RequiresSecondFactor
-        ) {
+        if let CampusAuthenticationResult::RequiresSecondFactor { .. } = service
+            .login(&credentials.id, &credentials.password)
+            .await?
+        {
             return Err(AppError::Auth(SECOND_FACTOR_MESSAGE.to_owned()));
         }
         *slot = Some(service.clone());
         Ok(service)
+    }
+
+    pub async fn second_factor_context(&self) -> Result<CampusSecondFactorContext, AppError> {
+        let pending = self.pending_login.lock().await;
+        let pending = pending
+            .as_ref()
+            .ok_or_else(|| AppError::Auth("没有等待完成的校园二次验证".to_owned()))?;
+        Ok(CampusSecondFactorContext {
+            generation: pending.generation,
+            credentials: pending.credentials.clone(),
+            login_url: pending.login_url.clone(),
+            target_host: pending.target_host.clone(),
+            identity_url: pending.identity_url.clone(),
+        })
+    }
+
+    pub async fn complete_second_factor(
+        &self,
+        generation: u64,
+        target_url: &str,
+        target_cookies: &[String],
+        identity_cookies: &[String],
+    ) -> Result<CampusStatus, AppError> {
+        let pending = self
+            .pending_login
+            .lock()
+            .await
+            .as_ref()
+            .filter(|pending| pending.generation == generation)
+            .cloned()
+            .ok_or_else(|| AppError::Auth("校园登录请求已失效，请重新登录".to_owned()))?;
+
+        pending
+            .service
+            .import_cookie_headers(target_url, target_cookies)?;
+        pending
+            .service
+            .import_cookie_headers(&pending.identity_url, identity_cookies)?;
+        pending
+            .service
+            .service_page(&pending.service.service)
+            .await?;
+
+        let mut credentials = pending.credentials;
+        credentials.name = pending.service.fetch_user_name().await.ok();
+        self.store.save(&credentials)?;
+        *self.service.lock().await = Some(pending.service);
+
+        let mut slot = self.pending_login.lock().await;
+        if slot
+            .as_ref()
+            .is_some_and(|pending| pending.generation == generation)
+        {
+            *slot = None;
+        }
+
+        Ok(CampusStatus {
+            logged_in: true,
+            id: Some(credentials.id),
+            name: credentials.name,
+        })
+    }
+
+    pub async fn cancel_second_factor(&self, generation: u64) {
+        let mut slot = self.pending_login.lock().await;
+        if slot
+            .as_ref()
+            .is_some_and(|pending| pending.generation == generation)
+        {
+            *slot = None;
+        }
+    }
+
+    pub async fn clear_pending_second_factor(&self) {
+        self.pending_generation.fetch_add(1, Ordering::AcqRel);
+        *self.pending_login.lock().await = None;
     }
 
     pub fn credentials_for_enhanced_auth(&self) -> Result<CampusCredentials, AppError> {
@@ -730,7 +855,7 @@ impl CampusSession {
     pub async fn enhanced_auth_context(
         &self,
         service_url: &str,
-    ) -> Result<(String, String), AppError> {
+    ) -> Result<(String, String, String), AppError> {
         let service = self.authenticated_service().await?;
         let target_host = host_of(service_url)?;
         let login_url = service.authentication_url(service_url).await?;
@@ -745,7 +870,11 @@ impl CampusSession {
                 "意外的双因素认证跳转目标：{login_host}"
             )));
         }
-        Ok((login_url.to_string(), target_host))
+        Ok((
+            login_url.to_string(),
+            target_host,
+            format!("https://{}/", service.id_host),
+        ))
     }
 
     pub async fn import_enhanced_auth_cookies(
@@ -886,19 +1015,20 @@ fn encrypt_password(public_key_der: &[u8], password: &str) -> Result<String, App
     Ok(base64::engine::general_purpose::STANDARD.encode(encrypted))
 }
 
-/// Map the authExecute response to a user-facing result, as the Flutter client does.
-fn auth_execute_error(body: &Value) -> Result<(), AppError> {
+/// Return the issued login token, or `None` when the user must continue in a
+/// browser (captcha, SMS confirmation, or another interactive challenge).
+fn auth_execute_login_token(body: &Value) -> Result<Option<&str>, AppError> {
     let message = body.get("message").and_then(Value::as_str).unwrap_or("");
     let code = body.get("code").map(Value::to_string).unwrap_or_default();
 
     if message.contains("请输入验证码") {
-        Err(AppError::Auth(
-            "触发验证码保护，请稍后重试或先在网页端完成登录".to_owned(),
-        ))
+        Ok(None)
     } else if message.contains("用户名或密码错误") {
         Err(AppError::Auth("学号或密码不正确".to_owned()))
+    } else if let Some(login_token) = body.get("loginToken").and_then(Value::as_str) {
+        Ok(Some(login_token))
     } else if code.contains("200") || code.contains("0") {
-        Ok(())
+        Ok(None)
     } else if message.is_empty() {
         Err(AppError::Upstream("认证失败".to_owned()))
     } else {
@@ -1043,18 +1173,26 @@ mod tests {
     }
 
     #[test]
-    fn auth_execute_error_maps_markers() {
+    fn auth_execute_result_maps_markers() {
         assert!(
-            auth_execute_error(&serde_json::json!({
+            auth_execute_login_token(&serde_json::json!({
                 "code": 4020, "message": "认证失败,您还有3次重试机会。原因分析： 用户名或密码错误 "
             }))
             .is_err()
         );
-        assert!(
-            auth_execute_error(&serde_json::json!({
-                "code": "200", "message": "操作成功!"
+        assert_eq!(
+            auth_execute_login_token(&serde_json::json!({
+                "code": "200", "message": "操作成功!", "loginToken": "token"
             }))
-            .is_ok()
+            .expect("successful response should parse"),
+            Some("token")
+        );
+        assert_eq!(
+            auth_execute_login_token(&serde_json::json!({
+                "code": "200", "message": "请输入验证码"
+            }))
+            .expect("interactive challenge should be supported"),
+            None
         );
     }
 

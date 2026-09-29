@@ -9,7 +9,8 @@ mod webvpn;
 
 pub use campus::{
     CampusAuthenticationResult, CampusCredentialStore, CampusCredentials, CampusLoginResult,
-    CampusService, CampusSession, CampusStatus, DEFAULT_ID_HOST, merge_campus_status,
+    CampusSecondFactorContext, CampusService, CampusSession, CampusStatus, DEFAULT_ID_HOST,
+    merge_campus_status,
 };
 pub use campus_services::{CampusLifeService, CampusLocation, teaching_buildings};
 pub use error::AppError;
