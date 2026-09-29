@@ -8,8 +8,8 @@ mod timetable;
 mod webvpn;
 
 pub use campus::{
-    CampusCredentialStore, CampusCredentials, CampusService, CampusSession, CampusStatus,
-    DEFAULT_ID_HOST, merge_campus_status,
+    CampusAuthenticationResult, CampusCredentialStore, CampusCredentials, CampusLoginResult,
+    CampusService, CampusSession, CampusStatus, DEFAULT_ID_HOST, merge_campus_status,
 };
 pub use campus_services::{CampusLifeService, CampusLocation, teaching_buildings};
 pub use error::AppError;

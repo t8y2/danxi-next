@@ -26,6 +26,10 @@ export interface CampusStatus {
   name: string | null;
 }
 
+export type CampusLoginResult =
+  | { state: "authenticated"; status: CampusStatus }
+  | { state: "requiresSecondFactor"; message: string };
+
 export interface TimetableCourse {
   courseName: string;
   roomName: string | null;

@@ -1,5 +1,5 @@
 use danxi_core::{
-    AppError, CampusBus, CampusLifeService, CampusLocation, CampusSession, CampusStatus,
+    AppError, CampusBus, CampusLifeService, CampusLocation, CampusLoginResult, CampusSession,
     DiningCrowdedness, EmptyClassroom, EvaluationCourseDetail, EvaluationCourseGroup,
     EvaluationReview, ForumHole, ForumThreadPage, HoleSortOrder, LibraryOccupancy, SessionManager,
     SessionStatus,
@@ -129,7 +129,7 @@ pub struct EmptyClassroomRequest {
 pub async fn campus_login(
     campus: State<'_, CampusSession>,
     request: CampusLoginRequest,
-) -> Result<CampusStatus, danxi_core::AppError> {
+) -> Result<CampusLoginResult, danxi_core::AppError> {
     campus
         .login(&request.id, &request.password, request.is_graduate)
         .await

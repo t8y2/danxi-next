@@ -21,6 +21,7 @@ const DEFAULT_AUTH_SERVICE: &str = "https://fdjwgl.fudan.edu.cn/student/sso/logi
 const EHALL_PROFILE_URL: &str = "https://ehall.fudan.edu.cn/manage/common/login/index?redirect=https%3A%2F%2Fehall.fudan.edu.cn";
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36";
 const DIRECT_ROUTE_CACHE_TTL: Duration = Duration::from_secs(60);
+const SECOND_FACTOR_MESSAGE: &str = "该账户需要二次验证，请先在复旦统一身份认证网页完成验证后重试";
 
 #[derive(Clone, Copy)]
 struct DirectRoute {
@@ -49,6 +50,24 @@ pub struct CampusStatus {
     pub logged_in: bool,
     pub id: Option<String>,
     pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum CampusLoginResult {
+    Authenticated { status: CampusStatus },
+    RequiresSecondFactor { message: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CampusAuthenticationResult {
+    Authenticated,
+    RequiresSecondFactor,
+}
+
+enum AuthMethodSelection {
+    Password(String),
+    RequiresSecondFactor,
 }
 
 /// Persistence boundary for campus credentials.
@@ -120,9 +139,16 @@ impl CampusService {
         })
     }
 
-    pub async fn login(&self, id: &str, password: &str) -> Result<(), AppError> {
+    pub async fn login(
+        &self,
+        id: &str,
+        password: &str,
+    ) -> Result<CampusAuthenticationResult, AppError> {
         let (lck, entity_id) = self.authentication_context().await?;
-        let chain_code = self.auth_chain_code(&lck, &entity_id).await?;
+        let AuthMethodSelection::Password(chain_code) = self.auth_method(&lck, &entity_id).await?
+        else {
+            return Ok(CampusAuthenticationResult::RequiresSecondFactor);
+        };
         let public_key = self.public_key().await?;
         let encrypted = encrypt_password(&public_key, password)?;
 
@@ -171,7 +197,7 @@ impl CampusService {
         if !status.is_success() {
             return Err(AppError::upstream_status(status));
         }
-        Ok(())
+        Ok(CampusAuthenticationResult::Authenticated)
     }
 
     /// Follow the authenticate redirect and pull `lck`/`entityId` out of the
@@ -228,7 +254,11 @@ impl CampusService {
             .map_err(|_| AppError::Upstream("认证跳转地址无效".to_owned()))
     }
 
-    async fn auth_chain_code(&self, lck: &str, entity_id: &str) -> Result<String, AppError> {
+    async fn auth_method(
+        &self,
+        lck: &str,
+        entity_id: &str,
+    ) -> Result<AuthMethodSelection, AppError> {
         let response = self
             .http
             .post(format!(
@@ -247,9 +277,7 @@ impl CampusService {
             .await
             .map_err(|_| AppError::Upstream("认证方式响应格式无法解析".to_owned()))?;
         if body.get("second").and_then(Value::as_bool) == Some(true) {
-            return Err(AppError::Auth(
-                "该服务要求二次验证，暂不支持，请先在网页端完成验证".to_owned(),
-            ));
+            return Ok(AuthMethodSelection::RequiresSecondFactor);
         }
         body.get("data")
             .and_then(Value::as_array)
@@ -260,7 +288,7 @@ impl CampusService {
             })
             .and_then(|method| method.get("authChainCode"))
             .and_then(Value::as_str)
-            .map(str::to_owned)
+            .map(|code| AuthMethodSelection::Password(code.to_owned()))
             .ok_or_else(|| AppError::Upstream("未找到密码登录方式".to_owned()))
     }
 
@@ -586,7 +614,7 @@ impl CampusSession {
         id: &str,
         password: &str,
         is_graduate: bool,
-    ) -> Result<CampusStatus, AppError> {
+    ) -> Result<CampusLoginResult, AppError> {
         let mut slot = self.service.lock().await;
         let mut credentials = CampusCredentials {
             id: id.trim().to_owned(),
@@ -595,16 +623,25 @@ impl CampusSession {
             is_graduate,
         };
         let service = Arc::new(CampusService::new()?);
-        service
-            .login(&credentials.id, &credentials.password)
-            .await?;
+        if matches!(
+            service
+                .login(&credentials.id, &credentials.password)
+                .await?,
+            CampusAuthenticationResult::RequiresSecondFactor
+        ) {
+            return Ok(CampusLoginResult::RequiresSecondFactor {
+                message: SECOND_FACTOR_MESSAGE.to_owned(),
+            });
+        }
         credentials.name = service.fetch_user_name().await.ok();
         self.store.save(&credentials)?;
         *slot = Some(service);
-        Ok(CampusStatus {
-            logged_in: true,
-            id: Some(credentials.id),
-            name: credentials.name,
+        Ok(CampusLoginResult::Authenticated {
+            status: CampusStatus {
+                logged_in: true,
+                id: Some(credentials.id),
+                name: credentials.name,
+            },
         })
     }
 
@@ -613,12 +650,22 @@ impl CampusSession {
             return Ok(CampusStatus::default());
         };
 
-        if credentials.name.is_none()
-            && let Ok(service) = self.authenticated_service().await
-            && let Ok(name) = service.fetch_user_name().await
-        {
-            credentials.name = Some(name);
-            let _ = self.store.save(&credentials);
+        let service = match self.authenticated_service().await {
+            Ok(service) => Some(service),
+            Err(AppError::Auth(_)) => {
+                self.logout().await?;
+                return Ok(CampusStatus::default());
+            }
+            Err(_) => None,
+        };
+
+        if credentials.name.is_none() {
+            if let Some(service) = service
+                && let Ok(name) = service.fetch_user_name().await
+            {
+                credentials.name = Some(name);
+                let _ = self.store.save(&credentials);
+            }
         }
 
         Ok(CampusStatus {
@@ -662,9 +709,14 @@ impl CampusSession {
             .load()?
             .ok_or_else(|| AppError::Auth("尚未登录复旦 UIS".to_owned()))?;
         let service = Arc::new(CampusService::new()?);
-        service
-            .login(&credentials.id, &credentials.password)
-            .await?;
+        if matches!(
+            service
+                .login(&credentials.id, &credentials.password)
+                .await?,
+            CampusAuthenticationResult::RequiresSecondFactor
+        ) {
+            return Err(AppError::Auth(SECOND_FACTOR_MESSAGE.to_owned()));
+        }
         *slot = Some(service.clone());
         Ok(service)
     }
@@ -1032,5 +1084,16 @@ mod tests {
         assert!(status.logged_in);
         assert_eq!(status.id.as_deref(), Some("23300000000"));
         assert_eq!(status.name.as_deref(), Some("张三"));
+    }
+
+    #[test]
+    fn serializes_second_factor_as_structured_login_state() {
+        let value = serde_json::to_value(CampusLoginResult::RequiresSecondFactor {
+            message: "需要验证".to_owned(),
+        })
+        .expect("login result should serialize");
+
+        assert_eq!(value["state"], "requiresSecondFactor");
+        assert_eq!(value["message"], "需要验证");
     }
 }

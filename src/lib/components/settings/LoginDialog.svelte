@@ -22,6 +22,7 @@
   let codeSent = $state(false);
   let countdown = $state(0);
   let error = $state("");
+  let notice = $state("");
   let emailFocused = $state(false);
   let activeSuggestion = $state(0);
   let campusId = $state("");
@@ -70,6 +71,7 @@
     codeSent = false;
     countdown = 0;
     error = "";
+    notice = "";
     emailFocused = false;
     activeSuggestion = 0;
     campusId = "";
@@ -113,18 +115,24 @@
     password = "";
     verifyCode = "";
     error = "";
+    notice = "";
   }
 
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     if (submitBlocked) return;
     error = "";
+    notice = "";
     busy = true;
 
     try {
       if (isCampus) {
-        await session.loginCampus(campusId.trim(), campusPassword);
+        const result = await session.loginCampus(campusId.trim(), campusPassword);
         campusPassword = "";
+        if (result.state === "requiresSecondFactor") {
+          notice = result.message;
+          return;
+        }
       } else if (isRegistering) {
         await session.register(email.trim(), password, verifyCode.trim());
         password = "";
@@ -212,7 +220,7 @@
             />
           </label>
           <p class="m-0 text-[11px] leading-4 text-muted-foreground">
-            校园凭证仅用于建立校园服务会话，不会显示在页面或写入日志。
+            凭证仅交给后端处理；桌面端加密存储，Web 端仅保存在服务端会话中。
           </p>
         {:else}
           <div class="relative">
@@ -341,6 +349,9 @@
 
         {#if error}
           <p class="m-0 rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</p>
+        {/if}
+        {#if notice}
+          <p class="m-0 rounded-lg bg-amber-500/12 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">{notice}</p>
         {/if}
 
         <div class="flex justify-end gap-2 border-t border-border pt-4">

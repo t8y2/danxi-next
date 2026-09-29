@@ -11,9 +11,11 @@
 - 茶楼列表：`GET /v1/forum/holes`（桌面端 `load_forum_holes`），在 Rust 层附加 Bearer Token，并在 401 时自动用 Refresh Token 换新后重试一次。
 - 评教：随机评价、课程搜索与课程评价详情均通过 Rust 侧访问旦课 API，共享旦挞 Token，并支持自动 WebVPN。
 - 校园服务：图书馆人数公开读取；食堂拥挤度、校车时刻和空教室通过 Rust 侧复用复旦 UIS 会话，空教室在校外自动回退 WebVPN。
-- 复旦校园登录（id.fudan.edu.cn，即原 UIS 的继任系统）：`POST /v1/session/campus/login`、`POST /v1/session/campus/logout`。完整复刻 Flutter 客户端 V2 流程：authenticate 重定向取 `lck`/`entityId` → `queryAuthMethods` → `getJsPublicKey` → RSA 加密密码 `authExecute`。凭证仅存桌面应用数据目录中的受限文件或 Web 服务端会话。
+- 复旦校园登录（id.fudan.edu.cn，即原 UIS 的继任系统）：`POST /v1/session/campus/login`、`POST /v1/session/campus/logout`。完整复刻 Flutter 客户端 V2 密码流程：authenticate 重定向取 `lck`/`entityId` → `queryAuthMethods` → `getJsPublicKey` → RSA 加密密码 `authExecute`。需要二次验证时返回结构化 `requiresSecondFactor` 状态，不再伪装成普通密码错误。
+- 桌面端社区 Token 与校园凭证使用 AES-256-GCM 加密文件保存，并自动迁移旧版明文 `secrets.json`；未重新使用系统钥匙串。Web 端凭证仅存在服务端会话内存中。
+- 应用启动时先从前端公开状态快照恢复登录 UI，再调用本地状态接口并在后台校验真实会话，网络抖动不会阻塞首屏登录态。
 
-首页的课程表内容仍是明确标记的预览数据；树洞动态已切换为真实接口数据。
+首页日程与完整日程页均使用真实课表接口；茶楼动态也使用真实接口数据。
 
 ## 现有服务
 
@@ -38,15 +40,15 @@ const timetable = await backend.loadTimetable();
 
 ```text
 TauriTransport → invoke("load_timetable")
-WebTransport   → GET /v1/timetable
+WebTransport   → GET /v1/campus/timetable
 ```
 
 ## 桌面端认证
 
-1. Svelte 调用 `loginFudan(accountType, username, password)`。
+1. Svelte 调用 `campusLogin(username, password)`；后端自动判断本科或研究生课表系统。
 2. Tauri command 将数据直接交给 Rust，不写入前端状态或日志。
 3. Rust 使用独立 Cookie Jar 处理复旦登录重定向和二次验证。
-4. 登录成功后仅把必要凭证写入应用数据目录中的受限凭证文件。
+4. 登录成功后仅把必要凭证写入应用数据目录中的加密凭证文件。
 5. 页面只收到 `SessionStatus`，不收到原始 Cookie 或密码。
 
 ## Web 端认证
@@ -64,8 +66,8 @@ WebTransport   → GET /v1/timetable
 1. ~~`SessionStore` 接口：桌面文件存储实现、Web 服务端会话实现。~~ 已完成（`danxi-core::session`、`src-tauri` FileSecretStore、`danxi-server` SessionRegistry）。
 2. ~~社区登录：`POST /api/login`，并实现 `POST /api/refresh` 自动刷新。~~ 已完成（`danxi-core::forum::SessionManager`）。
 3. ~~树洞列表：`GET /api/holes`，仅在 Rust 层附加 Bearer Token。~~ 已完成。
-4. 旦课搜索：`GET /api/v3/course_groups/search`，复用社区 Token。
-5. ~~复旦认证登录：独立 Cookie Jar，按本科生和研究生拆分流程。~~ 登录已完成（`danxi-core::campus`，新版 id.fudan.edu.cn 流程）。课表、图书馆人数、食堂拥挤度、校车时刻与空教室均已接入。
+4. ~~旦课搜索：`GET /api/v3/course_groups/search`，复用社区 Token。~~ 已完成，并已接入课程详情与随机评价。
+5. ~~复旦认证登录：独立 Cookie Jar，并自动识别本科生或研究生课表系统。~~ 密码登录已完成（`danxi-core::campus`，新版 id.fudan.edu.cn 流程）。课表、图书馆人数、食堂拥挤度、校车时刻与空教室均已接入；完整二次验证流程仍待实现。
 
 ## 本地代理
 

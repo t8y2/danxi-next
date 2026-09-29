@@ -2,8 +2,8 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import type {
   BackendError,
   CampusBus,
+  CampusLoginResult,
   CampusLocation,
-  CampusStatus,
   DiningCrowdedness,
   EmptyClassroom,
   EvaluationCourseDetail,
@@ -34,7 +34,7 @@ export interface BackendTransport {
   ): Promise<SessionStatus>;
   checkEmailRegistered(email: string, options?: CommunityNetworkOptions): Promise<boolean>;
   sendVerificationCode(email: string, options?: CommunityNetworkOptions): Promise<void>;
-  campusLogin(id: string, password: string): Promise<CampusStatus>;
+  campusLogin(id: string, password: string): Promise<CampusLoginResult>;
   campusLogout(): Promise<void>;
   loadTimetable(): Promise<Timetable>;
   loadLibraryOccupancy(): Promise<LibraryOccupancy[]>;
@@ -138,7 +138,7 @@ class TauriTransport implements BackendTransport {
   }
 
   campusLogin(id: string, password: string) {
-    return invoke<CampusStatus>("campus_login", { request: { id, password } });
+    return invoke<CampusLoginResult>("campus_login", { request: { id, password } });
   }
 
   loadTimetable() {
@@ -269,7 +269,7 @@ class WebTransport implements BackendTransport {
   }
 
   campusLogin(id: string, password: string) {
-    return this.post<CampusStatus>("/v1/session/campus/login", { id, password });
+    return this.post<CampusLoginResult>("/v1/session/campus/login", { id, password });
   }
 
   loadTimetable() {
@@ -455,7 +455,7 @@ class PreviewTransport implements BackendTransport {
     return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
   }
 
-  campusLogin(_id: string, _password: string): Promise<CampusStatus> {
+  campusLogin(_id: string, _password: string): Promise<CampusLoginResult> {
     return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
   }
 

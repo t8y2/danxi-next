@@ -2,6 +2,8 @@ import { backend, toTransportError } from "$lib/api";
 import { communityNetwork } from "$lib/stores/community-network.svelte";
 import type { ForumHole, ForumThreadPage, SessionStatus } from "$lib/types/app";
 
+const SESSION_SNAPSHOT_KEY = "danxi.session.public.v1";
+
 const loggedOut: SessionStatus = {
   communityLoggedIn: false,
   communityUser: null,
@@ -10,30 +12,67 @@ const loggedOut: SessionStatus = {
   campusName: null,
 };
 
+const initialStatus = loadSessionSnapshot();
+
+function loadSessionSnapshot(): SessionStatus | null {
+  if (typeof localStorage === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(SESSION_SNAPSHOT_KEY);
+    if (!raw) return null;
+    const status = JSON.parse(raw) as unknown;
+    return isSessionStatus(status) ? status : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistSessionSnapshot(status: SessionStatus) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(SESSION_SNAPSHOT_KEY, JSON.stringify(status));
+  } catch {
+    // Public session metadata is only a startup optimization.
+  }
+}
+
+function isSessionStatus(value: unknown): value is SessionStatus {
+  if (!value || typeof value !== "object") return false;
+  const status = value as Partial<SessionStatus>;
+  return (
+    typeof status.communityLoggedIn === "boolean" &&
+    typeof status.campusLoggedIn === "boolean" &&
+    (status.communityUser === null || typeof status.communityUser === "object") &&
+    (status.campusId === null || typeof status.campusId === "string") &&
+    (status.campusName === null || typeof status.campusName === "string")
+  );
+}
+
 /**
  * Community session state shared by the settings panel, the login dialog and
  * the forum panel. Credentials only pass through here on their way to the
  * transport; they are never kept in this store.
  */
 export class SessionStore {
-  status = $state<SessionStatus>(loggedOut);
-  ready = $state(false);
+  status = $state<SessionStatus>(initialStatus ?? loggedOut);
+  ready = $state(initialStatus !== null);
   #refreshRequest = 0;
   #communityMutation = 0;
   #campusMutation = 0;
 
   async restore() {
     const request = ++this.#refreshRequest;
+    const hadSnapshot = this.ready;
     const restored = await this.#restoreLocal(request);
     if (request !== this.#refreshRequest) return;
-    void this.#verify(request, restored);
+    void this.#verify(request, restored || hadSnapshot);
   }
 
   async refresh() {
     const request = ++this.#refreshRequest;
+    const hadSnapshot = this.ready;
     const restored = await this.#restoreLocal(request);
     if (request !== this.#refreshRequest) return;
-    await this.#verify(request, restored);
+    await this.#verify(request, restored || hadSnapshot);
   }
 
   async #restoreLocal(request: number) {
@@ -43,8 +82,7 @@ export class SessionStore {
         validate: false,
       });
       if (request !== this.#refreshRequest) return false;
-      this.status = status;
-      this.ready = true;
+      this.#setStatus(status);
       return true;
     } catch {
       return false;
@@ -57,9 +95,9 @@ export class SessionStore {
         useWebvpn: communityNetwork.useWebvpn,
         validate: true,
       });
-      if (request === this.#refreshRequest) this.status = status;
+      if (request === this.#refreshRequest) this.#setStatus(status);
     } catch {
-      if (request === this.#refreshRequest && !restored) this.status = loggedOut;
+      if (request === this.#refreshRequest && !restored) this.#setStatus(loggedOut);
     } finally {
       if (request === this.#refreshRequest) this.ready = true;
     }
@@ -88,16 +126,17 @@ export class SessionStore {
   async loginCampus(id: string, password: string) {
     const request = ++this.#campusMutation;
     this.#refreshRequest += 1;
-    const status = await backend.campusLogin(id, password);
-    if (request !== this.#campusMutation) return status;
-    this.status = {
+    const result = await backend.campusLogin(id, password);
+    if (request !== this.#campusMutation) return result;
+    if (result.state !== "authenticated") return result;
+    const status = result.status;
+    this.#setStatus({
       ...this.status,
       campusLoggedIn: status.loggedIn,
       campusId: status.id,
       campusName: status.name,
-    };
-    this.ready = true;
-    return status;
+    });
+    return result;
   }
 
   async logoutCampus() {
@@ -105,13 +144,12 @@ export class SessionStore {
     this.#refreshRequest += 1;
     await backend.campusLogout();
     if (request !== this.#campusMutation) return;
-    this.status = {
+    this.#setStatus({
       ...this.status,
       campusLoggedIn: false,
       campusId: null,
       campusName: null,
-    };
-    this.ready = true;
+    });
   }
 
   async checkEmailRegistered(email: string) {
@@ -127,22 +165,26 @@ export class SessionStore {
     this.#refreshRequest += 1;
     await backend.logoutCommunity();
     if (request !== this.#communityMutation) return;
-    this.status = {
+    this.#setStatus({
       ...this.status,
       communityLoggedIn: false,
       communityUser: null,
-    };
-    this.ready = true;
+    });
   }
 
   #applyCommunityStatus(status: SessionStatus): SessionStatus {
-    this.status = {
+    this.#setStatus({
       ...this.status,
       communityLoggedIn: status.communityLoggedIn,
       communityUser: status.communityUser,
-    };
-    this.ready = true;
+    });
     return this.status;
+  }
+
+  #setStatus(status: SessionStatus) {
+    this.status = status;
+    this.ready = true;
+    persistSessionSnapshot(status);
   }
 }
 
