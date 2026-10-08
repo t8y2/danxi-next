@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Access/refresh token pair issued by the community auth service.
 ///
@@ -36,11 +36,20 @@ pub struct SessionStatus {
     pub campus_name: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForumTag {
+    pub tag_id: i64,
     pub name: String,
     pub temperature: f32,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForumDivision {
+    pub division_id: i64,
+    pub name: String,
+    pub description: String,
 }
 
 /// Trimmed-down floor preview embedded in hole listings.
@@ -84,6 +93,8 @@ pub struct ForumHole {
     pub time_updated: String,
     pub view: i64,
     pub reply: i64,
+    pub favorite_count: i64,
+    pub locked: bool,
     pub tags: Vec<ForumTag>,
     pub first_floor: Option<ForumFloorPreview>,
     pub last_floor: Option<ForumFloorPreview>,
@@ -95,6 +106,7 @@ pub struct ForumHole {
 pub struct ForumThreadPage {
     pub hole: ForumHole,
     pub floors: Vec<ForumFloor>,
+    pub offset: u32,
     pub next_offset: Option<u32>,
 }
 

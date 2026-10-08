@@ -4,17 +4,20 @@
     ArrowRight,
     ChevronRight,
     Eye,
-    Heart,
     LoaderCircle,
     LogIn,
     MessageCircle,
+    PenLine,
     RefreshCw,
-    ThumbsDown,
+    Star,
   } from "@lucide/svelte";
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
+  import ForumComposer from "$lib/components/forum/ForumComposer.svelte";
+  import ForumDivisionSelect from "$lib/components/forum/ForumDivisionSelect.svelte";
+  import ForumFloorActions from "$lib/components/forum/ForumFloorActions.svelte";
   import { forum, session } from "$lib/stores/session.svelte";
-  import type { ForumFloor, ForumFloorPreview, ForumHole } from "$lib/types/app";
+  import type { ForumFloor, ForumFloorPreview, ForumHole, ForumTag } from "$lib/types/app";
 
   interface Props {
     expanded?: boolean;
@@ -27,6 +30,14 @@
   let listViewport = $state<HTMLDivElement>();
   let threadViewport = $state<HTMLDivElement>();
   let listViewportHeight = $state(640);
+  let selectedDivisionId = $state<number | null>(null);
+  let composer = $state<
+    | { mode: "post" }
+    | { mode: "reply"; holeId: number; floorId?: number; targetLabel: string }
+    | { mode: "report"; floorId: number; targetLabel: string }
+    | null
+  >(null);
+  let actionNotice = $state<string | null>(null);
 
   const listLoadThreshold = 360;
   const tagTones = [
@@ -54,8 +65,8 @@
     const preview = thread.hole.firstFloor;
     return (
       thread.floors.find((floor) => floor.floorId === preview?.floorId) ??
-      thread.floors[0] ??
-      preview
+      preview ??
+      thread.floors[0]
     );
   });
   const replies = $derived.by(() => {
@@ -69,8 +80,10 @@
     if (!session.ready) return;
     if (session.status.communityLoggedIn) {
       if (forum.state.phase === "idle" || forum.state.phase === "unauthenticated") {
-        void forum.load(10, order);
+        void forum.load(10, order, selectedDivisionId);
       }
+      void forum.loadMeta();
+      void forum.loadFavorites();
     } else {
       forum.requireLogin();
     }
@@ -97,6 +110,15 @@
       ) {
         void forum.loadMore();
       }
+    });
+  });
+
+  $effect(() => {
+    const element = threadViewport;
+    const currentThread = thread;
+    if (!element || !currentThread || actionNotice !== "回复已发布") return;
+    queueMicrotask(() => {
+      element.scrollTop = element.scrollHeight;
     });
   });
 
@@ -138,12 +160,18 @@
     if (order === next) return;
     order = next;
     if (listViewport) listViewport.scrollTop = 0;
-    void forum.load(10, next);
+    void forum.load(10, next, selectedDivisionId);
+  }
+
+  function selectDivision(value: number | null) {
+    selectedDivisionId = value;
+    if (listViewport) listViewport.scrollTop = 0;
+    void forum.load(10, order, selectedDivisionId);
   }
 
   function reloadList() {
     if (listViewport) listViewport.scrollTop = 0;
-    void forum.load(10, order);
+    void forum.load(10, order, selectedDivisionId);
   }
 
   function handleListScroll(event: Event) {
@@ -216,6 +244,86 @@
   function retryDetail() {
     if (forum.detail.phase === "error") void forum.open(forum.detail.holeId);
   }
+
+  async function openPostComposer() {
+    actionNotice = null;
+    forum.actionError = null;
+    await forum.loadMeta();
+    if (forum.meta.phase === "ready" && forum.meta.divisions.length > 0) {
+      composer = { mode: "post" };
+    } else if (forum.meta.phase === "error") {
+      forum.actionError = forum.meta.message;
+    } else {
+      forum.actionError = "当前没有可用的发帖分区";
+    }
+  }
+
+  function openReplyComposer(holeId: number, floor?: ForumFloor | ForumFloorPreview, floorNumber?: number) {
+    actionNotice = null;
+    forum.actionError = null;
+    composer = {
+      mode: "reply",
+      holeId,
+      floorId: floorNumber === 1 ? undefined : floor?.floorId,
+      targetLabel: floorNumber == null || floorNumber === 1 ? `回复 #${holeId}` : `回复 ${floorNumber}F`,
+    };
+  }
+
+  function openReportComposer(floor: ForumFloor | ForumFloorPreview, floorNumber: number) {
+    actionNotice = null;
+    forum.actionError = null;
+    composer = {
+      mode: "report",
+      floorId: floor.floorId,
+      targetLabel: `举报 #${thread?.hole.holeId ?? ""} 的 ${floorNumber}F`,
+    };
+  }
+
+  function reactToFloor(floor: ForumFloor | ForumFloorPreview, kind: "like" | "dislike") {
+    if ("liked" in floor) void forum.reactFloor(floor, kind);
+  }
+
+  function replyFloorNumber(index: number): number {
+    if (!thread) return index + 2;
+    return thread.offset === 0 ? index + 2 : thread.offset + index + 1;
+  }
+
+  async function submitComposer(payload: {
+    content: string;
+    divisionId: number | null;
+    tags: ForumTag[];
+  }) {
+    if (!composer) return { ok: false as const, message: "操作已取消" };
+    if (composer.mode === "post") {
+      if (payload.divisionId == null) return { ok: false as const, message: "请选择发帖分区" };
+      const result = await forum.createHole(payload.divisionId, payload.content, payload.tags);
+      if (result.ok) {
+        forum.actionError = null;
+        selectedDivisionId = payload.divisionId;
+        await forum.load(10, order, selectedDivisionId);
+        actionNotice = "讨论已发布";
+      }
+      return result;
+    }
+    if (composer.mode === "reply") {
+      const result = await forum.createFloor(
+        composer.holeId,
+        payload.content,
+        composer.floorId,
+      );
+      if (result.ok) {
+        forum.actionError = null;
+        actionNotice = "回复已发布";
+      }
+      return result;
+    }
+    const result = await forum.reportFloor(composer.floorId, payload.content);
+    if (result.ok) {
+      forum.actionError = null;
+      actionNotice = "举报已提交";
+    }
+    return result;
+  }
 </script>
 
 {#if expanded}
@@ -242,7 +350,7 @@
         <aside
           class={`min-h-0 flex-col bg-card ${forum.detail.phase === "idle" ? "flex" : "hidden lg:flex"}`}
         >
-          <div class="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
+          <div class="shrink-0 border-b border-border px-3 py-2">
             <div class="flex items-center gap-1">
               <Button
                 variant={order === "time_updated" ? "secondary" : "ghost"}
@@ -254,16 +362,28 @@
                 size="sm"
                 onclick={() => selectOrder("time_created")}>最新发布</Button
               >
+              <Button
+                variant="ghost"
+                size="icon"
+                class="ml-auto size-8"
+                aria-label="刷新讨论"
+                onclick={reloadList}
+              >
+                <RefreshCw size={14} />
+              </Button>
+              <Button size="sm" onclick={openPostComposer}>
+                <PenLine size={14} /> 发帖
+              </Button>
             </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              class="size-8"
-              aria-label="刷新讨论"
-              onclick={reloadList}
-            >
-              <RefreshCw size={14} />
-            </Button>
+            <div class="mt-2">
+              <ForumDivisionSelect
+                value={selectedDivisionId}
+                divisions={forum.meta.phase === "ready" ? forum.meta.divisions : []}
+                homepageLabel="首页推荐"
+                compact
+                onValueChange={selectDivision}
+              />
+            </div>
           </div>
 
           {#if forum.state.phase === "loading" || forum.state.phase === "idle"}
@@ -282,7 +402,11 @@
           {:else if forum.state.phase === "error"}
             <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
               <p class="m-0 text-sm leading-6 text-muted-foreground">{forum.state.message}</p>
-              <Button variant="outline" size="sm" onclick={() => forum.load(10, order)}>
+              <Button
+                variant="outline"
+                size="sm"
+                onclick={() => forum.load(10, order, selectedDivisionId)}
+              >
                 <RefreshCw size={14} /> 重试
               </Button>
             </div>
@@ -442,11 +566,43 @@
                   >
                 {/each}
               </div>
-              <div class="ml-auto hidden shrink-0 items-center gap-3 text-[11px] text-muted-foreground sm:flex">
+              <div class="ml-auto flex shrink-0 items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class={forum.isFavorite(thread.hole.holeId) ? "text-primary" : ""}
+                  aria-label={forum.isFavorite(thread.hole.holeId) ? "取消收藏" : "收藏讨论"}
+                  aria-pressed={forum.isFavorite(thread.hole.holeId)}
+                  disabled={forum.favoriteBusy || forum.favoritesLoading}
+                  onclick={() => forum.toggleFavorite(thread.hole.holeId)}
+                >
+                  <Star size={14} fill={forum.isFavorite(thread.hole.holeId) ? "currentColor" : "none"} />
+                  {thread.hole.favoriteCount}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={thread.hole.locked}
+                  title={thread.hole.locked ? "讨论已锁定" : "回复讨论"}
+                  onclick={() => openReplyComposer(thread.hole.holeId, firstFloor ?? undefined, 1)}
+                >
+                  <MessageCircle size={13} /> 回复
+                </Button>
+              </div>
+              <div class="hidden shrink-0 items-center gap-3 text-[11px] text-muted-foreground xl:flex">
                 <span class="flex items-center gap-1"><MessageCircle size={12} />{thread.hole.reply}</span>
                 <span class="flex items-center gap-1"><Eye size={12} />{compactNumber(thread.hole.view)}</span>
               </div>
             </div>
+
+            {#if forum.actionError || actionNotice}
+              <div
+                class={`shrink-0 border-b border-border px-5 py-2 text-xs ${forum.actionError ? "text-destructive" : "text-primary"}`}
+                role="status"
+              >
+                {forum.actionError ?? actionNotice}
+              </div>
+            {/if}
 
             <div
               bind:this={threadViewport}
@@ -478,6 +634,14 @@
                   <p
                     class="mb-0 mt-3 whitespace-pre-wrap break-words text-[15px] leading-6 text-foreground"
                   >{firstFloor.content}</p>
+                  <ForumFloorActions
+                    floor={firstFloor}
+                    busy={"liked" in firstFloor && forum.reactingFloorIds.includes(firstFloor.floorId)}
+                    replyDisabled={thread.hole.locked}
+                    onReact={(kind) => reactToFloor(firstFloor, kind)}
+                    onReply={() => openReplyComposer(thread.hole.holeId, firstFloor, 1)}
+                    onReport={() => openReportComposer(firstFloor, 1)}
+                  />
                 {:else}
                   <p class="m-0 py-6 text-sm text-muted-foreground">主题内容暂不可见</p>
                 {/if}
@@ -512,7 +676,7 @@
                             <Badge variant="outline" class="px-2 py-0.5 font-medium">我</Badge>
                           {/if}
                           <span class="ml-auto text-[11px] tabular-nums text-muted-foreground">
-                            {index + 2}F
+                            {replyFloorNumber(index)}F
                           </span>
                         </div>
                         <p class="mb-0 mt-0.5 text-[11px] text-muted-foreground">
@@ -530,20 +694,15 @@
                         floor.deleted ? "text-muted-foreground" : "text-foreground/92"
                       }`}
                     >{floor.content}</p>
-                    {#if floor.like > 0 || floor.dislike > 0}
-                      <footer class="mt-2.5 flex items-center gap-3 text-[11px] text-muted-foreground">
-                        {#if floor.like > 0}
-                          <span class={`flex items-center gap-1 ${floor.liked ? "text-primary" : ""}`}>
-                            <Heart size={12} fill={floor.liked ? "currentColor" : "none"} />{floor.like}
-                          </span>
-                        {/if}
-                        {#if floor.dislike > 0}
-                          <span class={`flex items-center gap-1 ${floor.disliked ? "text-destructive" : ""}`}>
-                            <ThumbsDown size={12} />{floor.dislike}
-                          </span>
-                        {/if}
-                      </footer>
-                    {/if}
+                    <ForumFloorActions
+                      {floor}
+                      busy={forum.reactingFloorIds.includes(floor.floorId)}
+                      replyDisabled={thread.hole.locked}
+                      onReact={(kind) => void forum.reactFloor(floor, kind)}
+                      onReply={() =>
+                        openReplyComposer(thread.hole.holeId, floor, replyFloorNumber(index))}
+                      onReport={() => openReportComposer(floor, replyFloorNumber(index))}
+                    />
                   </article>
                 {/each}
 
@@ -648,6 +807,18 @@
       </div>
     {/if}
   </section>
+{/if}
+
+{#if composer}
+  <ForumComposer
+    mode={composer.mode}
+    divisions={forum.meta.phase === "ready" ? forum.meta.divisions : []}
+    tags={forum.meta.phase === "ready" ? forum.meta.tags : []}
+    initialDivisionId={selectedDivisionId}
+    targetLabel={composer.mode === "post" ? "" : composer.targetLabel}
+    onCancel={() => (composer = null)}
+    onSubmit={submitComposer}
+  />
 {/if}
 
 <style>

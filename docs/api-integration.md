@@ -8,7 +8,7 @@
 - 桌面端使用 Tauri `invoke`。
 - Web 端使用 `danxi-server` 的 HTTP API。
 - 社区登录/登出/会话状态：`POST /v1/session/login`、`POST /v1/session/logout`、`GET /v1/session/status`（桌面端对应 `community_login`、`community_logout`、`session_status` 命令）。
-- 茶楼列表：`GET /v1/forum/holes`（桌面端 `load_forum_holes`），在 Rust 层附加 Bearer Token，并在 401 时自动用 Refresh Token 换新后重试一次。
+- 茶楼：支持分区与标签读取、帖子列表和详情、发帖、回复、点赞/点踩、收藏与举报；所有请求均在 Rust 层附加 Bearer Token，并在 401 时自动用 Refresh Token 换新后重试一次。
 - 评教：随机评价、课程搜索与课程评价详情均通过 Rust 侧访问旦课 API，共享旦挞 Token，并支持自动 WebVPN。
 - 校园服务：图书馆人数公开读取；食堂拥挤度、校车时刻和空教室通过 Rust 侧复用复旦 UIS 会话，空教室在校外自动回退 WebVPN。
 - 复旦校园登录（id.fudan.edu.cn，即原 UIS 的继任系统）：`POST /v1/session/campus/login`、`POST /v1/session/campus/logout`。完整复刻 Flutter 客户端 V2 密码流程：authenticate 重定向取 `lck`/`entityId` → `queryAuthMethods` → `getJsPublicKey` → RSA 加密密码 `authExecute`。需要二次验证时返回结构化 `requiresSecondFactor` 状态；桌面端随后调用 `complete_campus_second_factor` 打开内嵌认证窗口，完成后导入教务与统一认证 Cookie、验证目标会话并保存凭证。浏览器版受跨域 HttpOnly Cookie 隔离限制，当前会明确提示改用桌面客户端。

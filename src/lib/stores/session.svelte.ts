@@ -1,6 +1,14 @@
 import { backend, toTransportError } from "$lib/api";
 import { communityNetwork } from "$lib/stores/community-network.svelte";
-import type { ForumHole, ForumThreadPage, SessionStatus } from "$lib/types/app";
+import type {
+  ForumDivision,
+  ForumFloor,
+  ForumHole,
+  ForumReaction,
+  ForumTag,
+  ForumThreadPage,
+  SessionStatus,
+} from "$lib/types/app";
 
 const SESSION_SNAPSHOT_KEY = "danxi.session.public.v1";
 
@@ -213,6 +221,7 @@ export type ForumState =
       phase: "ready";
       holes: ForumHole[];
       order: "time_updated" | "time_created";
+      divisionId: number | null;
       loadingMore: boolean;
       hasMore: boolean;
       moreError: string | null;
@@ -231,10 +240,24 @@ export type ForumDetailState =
       moreError: string | null;
     };
 
+export type ForumMetaState =
+  | { phase: "idle" }
+  | { phase: "loading" }
+  | { phase: "error"; message: string }
+  | { phase: "ready"; divisions: ForumDivision[]; tags: ForumTag[] };
+
+export type ForumActionResult = { ok: true } | { ok: false; message: string };
+
 /** Hole listing state for the forum panel. */
 export class ForumStore {
   state = $state<ForumState>(idleForum);
   detail = $state<ForumDetailState>({ phase: "idle" });
+  meta = $state<ForumMetaState>({ phase: "idle" });
+  favoriteIds = $state<number[] | null>(null);
+  favoritesLoading = $state(false);
+  favoriteBusy = $state(false);
+  reactingFloorIds = $state<number[]>([]);
+  actionError = $state<string | null>(null);
   private listRequest = 0;
   private detailRequest = 0;
 
@@ -243,14 +266,21 @@ export class ForumStore {
     this.detailRequest += 1;
     this.state = { phase: "unauthenticated" };
     this.detail = { phase: "idle" };
+    this.meta = { phase: "idle" };
+    this.favoriteIds = null;
+    this.actionError = null;
   }
 
-  async load(size = 10, order: "time_updated" | "time_created" = "time_updated") {
+  async load(
+    size = 10,
+    order: "time_updated" | "time_created" = "time_updated",
+    divisionId: number | null = null,
+  ) {
     const request = ++this.listRequest;
     this.state = { phase: "loading" };
     try {
       const holes = await backend.loadForumHoles(
-        { size, order },
+        { size, order, ...(divisionId == null ? {} : { divisionId }) },
         { useWebvpn: communityNetwork.useWebvpn },
       );
       if (request !== this.listRequest) return;
@@ -258,6 +288,7 @@ export class ForumStore {
         phase: "ready",
         holes,
         order,
+        divisionId,
         loadingMore: false,
         hasMore: holes.length === size,
         moreError: null,
@@ -292,10 +323,11 @@ export class ForumStore {
 
     const request = this.listRequest;
     const order = this.state.order;
+    const divisionId = this.state.divisionId;
     this.state = { ...this.state, loadingMore: true, moreError: null };
     try {
       const page = await backend.loadForumHoles(
-        { size: 10, order, before },
+        { size: 10, order, before, ...(divisionId == null ? {} : { divisionId }) },
         { useWebvpn: communityNetwork.useWebvpn },
       );
       if (request !== this.listRequest || this.state.phase !== "ready") return;
@@ -326,11 +358,143 @@ export class ForumStore {
     void this.loadMoreHoles();
   }
 
-  async open(holeId: number) {
+  async loadMeta(force = false) {
+    if (!force && (this.meta.phase === "loading" || this.meta.phase === "ready")) return;
+    this.meta = { phase: "loading" };
+    try {
+      const [divisions, tags] = await Promise.all([
+        backend.loadForumDivisions({ useWebvpn: communityNetwork.useWebvpn }),
+        backend
+          .loadForumTags({ useWebvpn: communityNetwork.useWebvpn })
+          .catch(() => [] as ForumTag[]),
+      ]);
+      this.meta = { phase: "ready", divisions, tags };
+    } catch (raw) {
+      const error = toTransportError(raw);
+      this.meta = { phase: "error", message: error.message };
+    }
+  }
+
+  async loadFavorites(force = false) {
+    if (!force && (this.favoriteIds !== null || this.favoritesLoading)) return;
+    this.favoritesLoading = true;
+    try {
+      this.favoriteIds = await backend.loadForumFavoriteIds({
+        useWebvpn: communityNetwork.useWebvpn,
+      });
+    } catch (raw) {
+      this.actionError = toTransportError(raw).message;
+    } finally {
+      this.favoritesLoading = false;
+    }
+  }
+
+  isFavorite(holeId: number): boolean {
+    return this.favoriteIds?.includes(holeId) ?? false;
+  }
+
+  async createHole(
+    divisionId: number,
+    content: string,
+    tags: ForumTag[],
+  ): Promise<ForumActionResult> {
+    try {
+      await backend.createForumHole(divisionId, content, tags, {
+        useWebvpn: communityNetwork.useWebvpn,
+      });
+      return { ok: true };
+    } catch (raw) {
+      return { ok: false, message: toTransportError(raw).message };
+    }
+  }
+
+  async createFloor(
+    holeId: number,
+    content: string,
+    replyToFloorId?: number,
+  ): Promise<ForumActionResult> {
+    const body = replyToFloorId == null ? content : `##${replyToFloorId}\n${content}`;
+    const currentReplyCount =
+      this.detail.phase === "ready" && this.detail.thread.hole.holeId === holeId
+        ? this.detail.thread.hole.reply
+        : 0;
+    try {
+      await backend.createForumFloor(holeId, body, {
+        useWebvpn: communityNetwork.useWebvpn,
+      });
+      const latestOffset = Math.max(0, currentReplyCount + 2 - 10);
+      void this.open(holeId, latestOffset);
+      if (this.state.phase === "ready") {
+        void this.load(10, this.state.order, this.state.divisionId);
+      }
+      return { ok: true };
+    } catch (raw) {
+      return { ok: false, message: toTransportError(raw).message };
+    }
+  }
+
+  async reactFloor(floor: ForumFloor, kind: "like" | "dislike") {
+    if (this.reactingFloorIds.includes(floor.floorId)) return;
+    const reaction: ForumReaction =
+      kind === "like" ? (floor.liked ? 0 : 1) : floor.disliked ? 0 : -1;
+    this.actionError = null;
+    this.reactingFloorIds = [...this.reactingFloorIds, floor.floorId];
+    try {
+      const updated = await backend.reactForumFloor(floor.floorId, reaction, {
+        useWebvpn: communityNetwork.useWebvpn,
+      });
+      this.replaceFloor(updated);
+    } catch (raw) {
+      this.actionError = toTransportError(raw).message;
+    } finally {
+      this.reactingFloorIds = this.reactingFloorIds.filter((id) => id !== floor.floorId);
+    }
+  }
+
+  async toggleFavorite(holeId: number) {
+    if (this.favoriteBusy) return;
+    if (this.favoriteIds === null) await this.loadFavorites(true);
+    if (this.favoriteIds === null) return;
+
+    const wasFavorite = this.favoriteIds.includes(holeId);
+    const nextFavorite = !wasFavorite;
+    const previousIds = this.favoriteIds;
+    this.actionError = null;
+    this.favoriteBusy = true;
+    this.favoriteIds = nextFavorite
+      ? [...this.favoriteIds, holeId]
+      : this.favoriteIds.filter((id) => id !== holeId);
+    this.adjustFavoriteCount(holeId, nextFavorite ? 1 : -1);
+    try {
+      await backend.setForumFavorite(holeId, nextFavorite, {
+        useWebvpn: communityNetwork.useWebvpn,
+      });
+    } catch (raw) {
+      this.favoriteIds = previousIds;
+      this.adjustFavoriteCount(holeId, nextFavorite ? -1 : 1);
+      this.actionError = toTransportError(raw).message;
+    } finally {
+      this.favoriteBusy = false;
+    }
+  }
+
+  async reportFloor(floorId: number, reason: string): Promise<ForumActionResult> {
+    try {
+      await backend.reportForumFloor(floorId, reason, {
+        useWebvpn: communityNetwork.useWebvpn,
+      });
+      return { ok: true };
+    } catch (raw) {
+      return { ok: false, message: toTransportError(raw).message };
+    }
+  }
+
+  async open(holeId: number, offset = 0) {
     const request = ++this.detailRequest;
     this.detail = { phase: "loading", holeId };
+    this.actionError = null;
     try {
-      const thread = await backend.loadForumThread(holeId, 0, 10, {
+      const thread = await backend.loadForumThread(holeId, offset, 10, {
         useWebvpn: communityNetwork.useWebvpn,
       });
       if (request !== this.detailRequest) return;
@@ -377,6 +541,7 @@ export class ForumStore {
         thread: {
           hole: page.hole,
           floors: [...this.detail.thread.floors, ...appended],
+          offset: this.detail.thread.offset,
           nextOffset: appended.length > 0 ? page.nextOffset : null,
         },
         loadingMore: false,
@@ -386,6 +551,35 @@ export class ForumStore {
       if (request !== this.detailRequest || this.detail.phase !== "ready") return;
       const error = toTransportError(raw);
       this.detail = { ...this.detail, loadingMore: false, moreError: error.message };
+    }
+  }
+
+  private replaceFloor(updated: ForumFloor) {
+    if (this.detail.phase !== "ready") return;
+    this.detail = {
+      ...this.detail,
+      thread: {
+        ...this.detail.thread,
+        floors: this.detail.thread.floors.map((floor) =>
+          floor.floorId === updated.floorId ? updated : floor,
+        ),
+      },
+    };
+  }
+
+  private adjustFavoriteCount(holeId: number, delta: number) {
+    const updateHole = (hole: ForumHole): ForumHole =>
+      hole.holeId === holeId
+        ? { ...hole, favoriteCount: Math.max(0, hole.favoriteCount + delta) }
+        : hole;
+    if (this.state.phase === "ready") {
+      this.state = { ...this.state, holes: this.state.holes.map(updateHole) };
+    }
+    if (this.detail.phase === "ready" && this.detail.thread.hole.holeId === holeId) {
+      this.detail = {
+        ...this.detail,
+        thread: { ...this.detail.thread, hole: updateHole(this.detail.thread.hole) },
+      };
     }
   }
 }

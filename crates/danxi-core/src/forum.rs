@@ -9,8 +9,8 @@ use serde::Deserialize;
 
 use crate::{
     AppError, CampusSession, CommunityUser, EvaluationCourseDetail, EvaluationCourseGroup,
-    EvaluationRating, EvaluationReview, ForumFloor, ForumFloorPreview, ForumHole, ForumTag,
-    ForumThreadPage, HoleSortOrder, SessionStatus, SessionStore, TokenPair,
+    EvaluationRating, EvaluationReview, ForumDivision, ForumFloor, ForumFloorPreview, ForumHole,
+    ForumTag, ForumThreadPage, HoleSortOrder, SessionStatus, SessionStore, TokenPair,
 };
 
 pub const DEFAULT_FORUM_BASE_URL: &str = "https://forum.fduhole.com/api";
@@ -277,6 +277,194 @@ impl ForumService {
         Ok(raw.into_iter().map(Into::into).collect())
     }
 
+    pub async fn load_divisions(
+        &self,
+        access_token: &str,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<Vec<ForumDivision>, AppError> {
+        let request = self
+            .http
+            .get(format!("{}/divisions", self.forum_base))
+            .bearer_auth(access_token)
+            .build()?;
+        let response = self.execute(request, campus, use_webvpn).await?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(request_error(status));
+        }
+        let raw: Vec<RawDivision> = response.json().await?;
+        Ok(raw.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn load_tags(
+        &self,
+        access_token: &str,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<Vec<ForumTag>, AppError> {
+        let request = self
+            .http
+            .get(format!("{}/tags", self.forum_base))
+            .bearer_auth(access_token)
+            .build()?;
+        let response = self.execute(request, campus, use_webvpn).await?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(request_error(status));
+        }
+        let raw: Vec<RawTag> = response.json().await?;
+        Ok(raw.into_iter().map(Into::into).collect())
+    }
+
+    pub async fn create_hole(
+        &self,
+        access_token: &str,
+        division_id: i64,
+        content: &str,
+        tags: &[ForumTag],
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<(), AppError> {
+        let content = validate_forum_content(content)?;
+        if division_id <= 0 {
+            return Err(AppError::Validation("请选择发帖分区".to_owned()));
+        }
+        let tags = if tags.is_empty() {
+            vec![serde_json::json!({ "tag_id": 0, "temperature": 0, "name": "默认" })]
+        } else {
+            tags.iter()
+                .map(|tag| {
+                    serde_json::json!({
+                        "tag_id": tag.tag_id,
+                        "temperature": tag.temperature,
+                        "name": tag.name,
+                    })
+                })
+                .collect()
+        };
+        let request = self
+            .http
+            .post(format!("{}/divisions/{division_id}/holes", self.forum_base))
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({ "content": content, "tags": tags }))
+            .build()?;
+        ensure_success(self.execute(request, campus, use_webvpn).await?)
+    }
+
+    pub async fn create_floor(
+        &self,
+        access_token: &str,
+        hole_id: i64,
+        content: &str,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<(), AppError> {
+        let content = validate_forum_content(content)?;
+        if hole_id <= 0 {
+            return Err(AppError::Validation("帖子编号无效".to_owned()));
+        }
+        let request = self
+            .http
+            .post(format!("{}/holes/{hole_id}/floors", self.forum_base))
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({ "content": content }))
+            .build()?;
+        ensure_success(self.execute(request, campus, use_webvpn).await?)
+    }
+
+    pub async fn react_floor(
+        &self,
+        access_token: &str,
+        floor_id: i64,
+        reaction: i8,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<ForumFloor, AppError> {
+        if floor_id <= 0 || !(-1..=1).contains(&reaction) {
+            return Err(AppError::Validation("楼层操作无效".to_owned()));
+        }
+        let request = self
+            .http
+            .post(format!(
+                "{}/floors/{floor_id}/like/{reaction}",
+                self.forum_base
+            ))
+            .bearer_auth(access_token)
+            .build()?;
+        let response = self.execute(request, campus, use_webvpn).await?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(request_error(status));
+        }
+        Ok(response.json::<RawFloor>().await?.into())
+    }
+
+    pub async fn favorite_hole_ids(
+        &self,
+        access_token: &str,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<Vec<i64>, AppError> {
+        let request = self
+            .http
+            .get(format!("{}/user/favorites", self.forum_base))
+            .bearer_auth(access_token)
+            .query(&[("plain", true)])
+            .build()?;
+        let response = self.execute(request, campus, use_webvpn).await?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(request_error(status));
+        }
+        Ok(response.json::<RawIdList>().await?.data)
+    }
+
+    pub async fn set_favorite(
+        &self,
+        access_token: &str,
+        hole_id: i64,
+        favorite: bool,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<(), AppError> {
+        if hole_id <= 0 {
+            return Err(AppError::Validation("帖子编号无效".to_owned()));
+        }
+        let request = if favorite {
+            self.http
+                .post(format!("{}/user/favorites", self.forum_base))
+        } else {
+            self.http
+                .delete(format!("{}/user/favorites", self.forum_base))
+        }
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({ "hole_id": hole_id }))
+        .build()?;
+        ensure_success(self.execute(request, campus, use_webvpn).await?)
+    }
+
+    pub async fn report_floor(
+        &self,
+        access_token: &str,
+        floor_id: i64,
+        reason: &str,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<(), AppError> {
+        let reason = validate_forum_content(reason)?;
+        if floor_id <= 0 {
+            return Err(AppError::Validation("楼层编号无效".to_owned()));
+        }
+        let request = self
+            .http
+            .post(format!("{}/reports", self.forum_base))
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({ "floor_id": floor_id, "reason": reason }))
+            .build()?;
+        ensure_success(self.execute(request, campus, use_webvpn).await?)
+    }
+
     /// Load the topic metadata and one page of floors for a readable thread view.
     pub async fn load_thread(
         &self,
@@ -326,6 +514,7 @@ impl ForumService {
         Ok(ForumThreadPage {
             hole,
             floors,
+            offset,
             next_offset,
         })
     }
@@ -592,6 +781,207 @@ impl SessionManager {
     pub async fn logout(&self) -> Result<(), AppError> {
         let _guard = self.refresh_lock.lock().await;
         self.store.clear_token()
+    }
+
+    pub async fn load_divisions(
+        &self,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<Vec<ForumDivision>, AppError> {
+        let token = self.community_token()?;
+        match self
+            .forum
+            .load_divisions(&token.access, campus, use_webvpn)
+            .await
+        {
+            Ok(divisions) => Ok(divisions),
+            Err(AppError::Auth(_)) => {
+                let refreshed = self.refresh_token(&token, campus, use_webvpn).await?;
+                self.forum
+                    .load_divisions(&refreshed.access, campus, use_webvpn)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn load_tags(
+        &self,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<Vec<ForumTag>, AppError> {
+        let token = self.community_token()?;
+        match self
+            .forum
+            .load_tags(&token.access, campus, use_webvpn)
+            .await
+        {
+            Ok(tags) => Ok(tags),
+            Err(AppError::Auth(_)) => {
+                let refreshed = self.refresh_token(&token, campus, use_webvpn).await?;
+                self.forum
+                    .load_tags(&refreshed.access, campus, use_webvpn)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn create_hole(
+        &self,
+        division_id: i64,
+        content: &str,
+        tags: &[ForumTag],
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<(), AppError> {
+        let token = self.community_token()?;
+        match self
+            .forum
+            .create_hole(
+                &token.access,
+                division_id,
+                content,
+                tags,
+                campus,
+                use_webvpn,
+            )
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(AppError::Auth(_)) => {
+                let refreshed = self.refresh_token(&token, campus, use_webvpn).await?;
+                self.forum
+                    .create_hole(
+                        &refreshed.access,
+                        division_id,
+                        content,
+                        tags,
+                        campus,
+                        use_webvpn,
+                    )
+                    .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn create_floor(
+        &self,
+        hole_id: i64,
+        content: &str,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<(), AppError> {
+        let token = self.community_token()?;
+        match self
+            .forum
+            .create_floor(&token.access, hole_id, content, campus, use_webvpn)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(AppError::Auth(_)) => {
+                let refreshed = self.refresh_token(&token, campus, use_webvpn).await?;
+                self.forum
+                    .create_floor(&refreshed.access, hole_id, content, campus, use_webvpn)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn react_floor(
+        &self,
+        floor_id: i64,
+        reaction: i8,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<ForumFloor, AppError> {
+        let token = self.community_token()?;
+        match self
+            .forum
+            .react_floor(&token.access, floor_id, reaction, campus, use_webvpn)
+            .await
+        {
+            Ok(floor) => Ok(floor),
+            Err(AppError::Auth(_)) => {
+                let refreshed = self.refresh_token(&token, campus, use_webvpn).await?;
+                self.forum
+                    .react_floor(&refreshed.access, floor_id, reaction, campus, use_webvpn)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn favorite_hole_ids(
+        &self,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<Vec<i64>, AppError> {
+        let token = self.community_token()?;
+        match self
+            .forum
+            .favorite_hole_ids(&token.access, campus, use_webvpn)
+            .await
+        {
+            Ok(ids) => Ok(ids),
+            Err(AppError::Auth(_)) => {
+                let refreshed = self.refresh_token(&token, campus, use_webvpn).await?;
+                self.forum
+                    .favorite_hole_ids(&refreshed.access, campus, use_webvpn)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn set_favorite(
+        &self,
+        hole_id: i64,
+        favorite: bool,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<(), AppError> {
+        let token = self.community_token()?;
+        match self
+            .forum
+            .set_favorite(&token.access, hole_id, favorite, campus, use_webvpn)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(AppError::Auth(_)) => {
+                let refreshed = self.refresh_token(&token, campus, use_webvpn).await?;
+                self.forum
+                    .set_favorite(&refreshed.access, hole_id, favorite, campus, use_webvpn)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn report_floor(
+        &self,
+        floor_id: i64,
+        reason: &str,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<(), AppError> {
+        let token = self.community_token()?;
+        match self
+            .forum
+            .report_floor(&token.access, floor_id, reason, campus, use_webvpn)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(AppError::Auth(_)) => {
+                let refreshed = self.refresh_token(&token, campus, use_webvpn).await?;
+                self.forum
+                    .report_floor(&refreshed.access, floor_id, reason, campus, use_webvpn)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub async fn load_holes(
@@ -894,6 +1284,24 @@ fn request_error(status: StatusCode) -> AppError {
     }
 }
 
+fn ensure_success(response: Response) -> Result<(), AppError> {
+    let status = response.status();
+    if status.is_success() {
+        Ok(())
+    } else {
+        Err(request_error(status))
+    }
+}
+
+fn validate_forum_content(content: &str) -> Result<&str, AppError> {
+    let content = content.trim();
+    if content.is_empty() {
+        Err(AppError::Validation("内容不能为空".to_owned()))
+    } else {
+        Ok(content)
+    }
+}
+
 fn forum_page_size(size: u32) -> u32 {
     size.clamp(1, 10)
 }
@@ -921,6 +1329,8 @@ struct RawHole {
     time_updated: Option<String>,
     view: Option<i64>,
     reply: Option<i64>,
+    favorite_count: Option<i64>,
+    locked: Option<bool>,
     #[serde(default)]
     tags: Vec<RawTag>,
     floors: Option<RawFloors>,
@@ -928,8 +1338,22 @@ struct RawHole {
 
 #[derive(Deserialize)]
 struct RawTag {
+    tag_id: Option<i64>,
     name: Option<String>,
     temperature: Option<f32>,
+}
+
+#[derive(Deserialize)]
+struct RawDivision {
+    division_id: Option<i64>,
+    name: Option<String>,
+    description: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawIdList {
+    #[serde(default)]
+    data: Vec<i64>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -1036,8 +1460,19 @@ struct RawCourseRating {
 impl From<RawTag> for ForumTag {
     fn from(value: RawTag) -> Self {
         ForumTag {
+            tag_id: value.tag_id.unwrap_or_default(),
             name: value.name.unwrap_or_default(),
             temperature: value.temperature.unwrap_or_default(),
+        }
+    }
+}
+
+impl From<RawDivision> for ForumDivision {
+    fn from(value: RawDivision) -> Self {
+        ForumDivision {
+            division_id: value.division_id.unwrap_or_default(),
+            name: value.name.unwrap_or_default(),
+            description: value.description.unwrap_or_default(),
         }
     }
 }
@@ -1085,6 +1520,8 @@ impl From<RawHole> for ForumHole {
             time_updated: value.time_updated.unwrap_or_default(),
             view: value.view.unwrap_or_default(),
             reply: value.reply.unwrap_or_default(),
+            favorite_count: value.favorite_count.unwrap_or_default(),
+            locked: value.locked.unwrap_or(false),
             tags: value.tags.into_iter().map(Into::into).collect(),
             first_floor: floors
                 .as_ref()
@@ -1289,6 +1726,15 @@ mod tests {
     }
 
     #[test]
+    fn forum_content_is_trimmed_and_rejects_empty_input() {
+        assert_eq!(validate_forum_content("  正文  ").unwrap(), "正文");
+        assert!(matches!(
+            validate_forum_content(" \n "),
+            Err(AppError::Validation(_))
+        ));
+    }
+
+    #[test]
     fn local_session_status_uses_stored_token_without_profile_request() {
         let store = Arc::new(crate::MemorySessionStore::new());
         store
@@ -1316,7 +1762,9 @@ mod tests {
             "time_updated": "2026-09-28T09:30:00Z",
             "view": 321,
             "reply": 18,
-            "tags": [{ "name": "校园生活", "temperature": 42.0 }],
+            "favorite_count": 7,
+            "locked": true,
+            "tags": [{ "tag_id": 4, "name": "校园生活", "temperature": 42.0 }],
             "floors": {
                 "first_floor": {
                     "floor_id": 1,
@@ -1331,7 +1779,10 @@ mod tests {
         let hole: ForumHole = raw.into();
         assert_eq!(hole.hole_id, 104821);
         assert_eq!(hole.reply, 18);
+        assert_eq!(hole.favorite_count, 7);
+        assert!(hole.locked);
         assert_eq!(hole.tags.len(), 1);
+        assert_eq!(hole.tags[0].tag_id, 4);
         assert_eq!(hole.tags[0].name, "校园生活");
         assert_eq!(
             hole.first_floor.as_ref().expect("first floor").content,

@@ -9,6 +9,8 @@ pub enum AppError {
     Configuration(String),
     #[error("authentication failed: {0}")]
     Auth(String),
+    #[error("request validation failed: {0}")]
+    Validation(String),
     #[error("enhanced authentication required: {0}")]
     EnhancedAuth(String),
     #[error("upstream service returned an error: {0}")]

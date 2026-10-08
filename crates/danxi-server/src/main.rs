@@ -7,7 +7,7 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use danxi_core::{CampusLifeService, CampusLocation, ForumService, HoleSortOrder};
+use danxi_core::{CampusLifeService, CampusLocation, ForumService, ForumTag, HoleSortOrder};
 use serde::Deserialize;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
@@ -90,8 +90,22 @@ async fn main() {
         .route("/v1/campus/buses", get(campus_buses))
         .route("/v1/campus/classrooms", get(campus_classrooms))
         .route("/v1/session/logout", post(session_logout))
-        .route("/v1/forum/holes", get(forum_holes))
+        .route("/v1/forum/divisions", get(forum_divisions))
+        .route("/v1/forum/tags", get(forum_tags))
+        .route("/v1/forum/holes", get(forum_holes).post(forum_create_hole))
         .route("/v1/forum/holes/{hole_id}", get(forum_thread))
+        .route("/v1/forum/holes/{hole_id}/floors", post(forum_create_floor))
+        .route(
+            "/v1/forum/floors/{floor_id}/reaction",
+            post(forum_react_floor),
+        )
+        .route(
+            "/v1/forum/favorites",
+            get(forum_favorite_ids)
+                .post(forum_add_favorite)
+                .delete(forum_remove_favorite),
+        )
+        .route("/v1/forum/reports", post(forum_report_floor))
         .route("/v1/evaluation/random", get(evaluation_random))
         .route("/v1/evaluation/search", get(evaluation_search))
         .route(
@@ -102,7 +116,7 @@ async fn main() {
         .layer(
             CorsLayer::new()
                 .allow_origin(allowed_origin)
-                .allow_methods([Method::GET, Method::POST])
+                .allow_methods([Method::GET, Method::POST, Method::DELETE])
                 .allow_headers([header::ACCEPT, header::CONTENT_TYPE])
                 .allow_credentials(true),
         )
@@ -532,6 +546,56 @@ async fn campus_logout(State(state): State<ApiState>, headers: axum::http::Heade
 }
 
 #[derive(Deserialize)]
+struct ForumNetworkQuery {
+    #[serde(default = "default_use_webvpn")]
+    use_webvpn: bool,
+}
+
+async fn forum_divisions(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<ForumNetworkQuery>,
+) -> Response {
+    let Some(web_session) = state
+        .sessions
+        .resolve(session_id_from_headers(&headers).as_deref())
+    else {
+        return unauthorized();
+    };
+    let manager = web_session.manager();
+    let campus = web_session.campus().await;
+    match manager
+        .load_divisions(Some(campus.as_ref()), query.use_webvpn)
+        .await
+    {
+        Ok(divisions) => Json(divisions).into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+async fn forum_tags(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<ForumNetworkQuery>,
+) -> Response {
+    let Some(web_session) = state
+        .sessions
+        .resolve(session_id_from_headers(&headers).as_deref())
+    else {
+        return unauthorized();
+    };
+    let manager = web_session.manager();
+    let campus = web_session.campus().await;
+    match manager
+        .load_tags(Some(campus.as_ref()), query.use_webvpn)
+        .await
+    {
+        Ok(tags) => Json(tags).into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+#[derive(Deserialize)]
 struct HoleQuery {
     division_id: Option<i64>,
     size: Option<u32>,
@@ -607,6 +671,227 @@ async fn forum_thread(
         .await
     {
         Ok(thread) => Json(thread).into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateForumHoleBody {
+    division_id: i64,
+    content: String,
+    #[serde(default)]
+    tags: Vec<ForumTag>,
+    #[serde(default = "default_use_webvpn")]
+    use_webvpn: bool,
+}
+
+async fn forum_create_hole(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<CreateForumHoleBody>,
+) -> Response {
+    let Some(web_session) = state
+        .sessions
+        .resolve(session_id_from_headers(&headers).as_deref())
+    else {
+        return unauthorized();
+    };
+    let manager = web_session.manager();
+    let campus = web_session.campus().await;
+    match manager
+        .create_hole(
+            body.division_id,
+            &body.content,
+            &body.tags,
+            Some(campus.as_ref()),
+            body.use_webvpn,
+        )
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateForumFloorBody {
+    content: String,
+    #[serde(default = "default_use_webvpn")]
+    use_webvpn: bool,
+}
+
+async fn forum_create_floor(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+    Path(hole_id): Path<i64>,
+    Json(body): Json<CreateForumFloorBody>,
+) -> Response {
+    let Some(web_session) = state
+        .sessions
+        .resolve(session_id_from_headers(&headers).as_deref())
+    else {
+        return unauthorized();
+    };
+    let manager = web_session.manager();
+    let campus = web_session.campus().await;
+    match manager
+        .create_floor(
+            hole_id,
+            &body.content,
+            Some(campus.as_ref()),
+            body.use_webvpn,
+        )
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReactForumFloorBody {
+    reaction: i8,
+    #[serde(default = "default_use_webvpn")]
+    use_webvpn: bool,
+}
+
+async fn forum_react_floor(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+    Path(floor_id): Path<i64>,
+    Json(body): Json<ReactForumFloorBody>,
+) -> Response {
+    let Some(web_session) = state
+        .sessions
+        .resolve(session_id_from_headers(&headers).as_deref())
+    else {
+        return unauthorized();
+    };
+    let manager = web_session.manager();
+    let campus = web_session.campus().await;
+    match manager
+        .react_floor(
+            floor_id,
+            body.reaction,
+            Some(campus.as_ref()),
+            body.use_webvpn,
+        )
+        .await
+    {
+        Ok(floor) => Json(floor).into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+async fn forum_favorite_ids(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<ForumNetworkQuery>,
+) -> Response {
+    let Some(web_session) = state
+        .sessions
+        .resolve(session_id_from_headers(&headers).as_deref())
+    else {
+        return unauthorized();
+    };
+    let manager = web_session.manager();
+    let campus = web_session.campus().await;
+    match manager
+        .favorite_hole_ids(Some(campus.as_ref()), query.use_webvpn)
+        .await
+    {
+        Ok(ids) => Json(ids).into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetForumFavoriteBody {
+    hole_id: i64,
+    #[serde(default = "default_use_webvpn")]
+    use_webvpn: bool,
+}
+
+async fn forum_add_favorite(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<SetForumFavoriteBody>,
+) -> Response {
+    forum_set_favorite(state, headers, body, true).await
+}
+
+async fn forum_remove_favorite(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<SetForumFavoriteBody>,
+) -> Response {
+    forum_set_favorite(state, headers, body, false).await
+}
+
+async fn forum_set_favorite(
+    state: ApiState,
+    headers: axum::http::HeaderMap,
+    body: SetForumFavoriteBody,
+    favorite: bool,
+) -> Response {
+    let Some(web_session) = state
+        .sessions
+        .resolve(session_id_from_headers(&headers).as_deref())
+    else {
+        return unauthorized();
+    };
+    let manager = web_session.manager();
+    let campus = web_session.campus().await;
+    match manager
+        .set_favorite(
+            body.hole_id,
+            favorite,
+            Some(campus.as_ref()),
+            body.use_webvpn,
+        )
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReportForumFloorBody {
+    floor_id: i64,
+    reason: String,
+    #[serde(default = "default_use_webvpn")]
+    use_webvpn: bool,
+}
+
+async fn forum_report_floor(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<ReportForumFloorBody>,
+) -> Response {
+    let Some(web_session) = state
+        .sessions
+        .resolve(session_id_from_headers(&headers).as_deref())
+    else {
+        return unauthorized();
+    };
+    let manager = web_session.manager();
+    let campus = web_session.campus().await;
+    match manager
+        .report_floor(
+            body.floor_id,
+            &body.reason,
+            Some(campus.as_ref()),
+            body.use_webvpn,
+        )
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => error_response(&error),
     }
 }
@@ -746,6 +1031,7 @@ fn default_validate_session() -> bool {
 fn error_response(error: &danxi_core::AppError) -> Response {
     let status = match error {
         danxi_core::AppError::Auth(_) => StatusCode::UNAUTHORIZED,
+        danxi_core::AppError::Validation(_) => StatusCode::BAD_REQUEST,
         danxi_core::AppError::EnhancedAuth(_) => StatusCode::PRECONDITION_REQUIRED,
         danxi_core::AppError::Upstream(_) => StatusCode::BAD_GATEWAY,
         danxi_core::AppError::Network(_) => StatusCode::BAD_GATEWAY,

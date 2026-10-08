@@ -85,8 +85,15 @@ export interface EmptyClassroom {
 }
 
 export interface ForumTag {
+  tagId: number;
   name: string;
   temperature: number;
+}
+
+export interface ForumDivision {
+  divisionId: number;
+  name: string;
+  description: string;
 }
 
 export interface ForumFloorPreview {
@@ -121,6 +128,8 @@ export interface ForumHole {
   timeUpdated: string;
   view: number;
   reply: number;
+  favoriteCount: number;
+  locked: boolean;
   tags: ForumTag[];
   firstFloor: ForumFloorPreview | null;
   lastFloor: ForumFloorPreview | null;
@@ -129,6 +138,7 @@ export interface ForumHole {
 export interface ForumThreadPage {
   hole: ForumHole;
   floors: ForumFloor[];
+  offset: number;
   nextOffset: number | null;
 }
 
@@ -138,6 +148,8 @@ export interface HoleListQuery {
   order?: "time_updated" | "time_created";
   before?: string;
 }
+
+export type ForumReaction = -1 | 0 | 1;
 
 export interface EvaluationCourseGroup {
   groupId: number;

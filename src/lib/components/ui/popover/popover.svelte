@@ -7,6 +7,7 @@
     content: Snippet;
     triggerClass?: string;
     align?: "start" | "center" | "end";
+    disabled?: boolean;
     open?: boolean;
     onOpenChange?: (open: boolean) => void;
   }
@@ -16,6 +17,7 @@
     content,
     triggerClass = "",
     align = "start",
+    disabled = false,
     open = $bindable(false),
     onOpenChange,
   }: Props = $props();
@@ -28,7 +30,7 @@
     onOpenChange?.(next);
   }}
 >
-  <PopoverPrimitive.Trigger class={triggerClass}>
+  <PopoverPrimitive.Trigger class={triggerClass} {disabled}>
     {@render trigger()}
   </PopoverPrimitive.Trigger>
   <PopoverPrimitive.Content

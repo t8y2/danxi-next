@@ -1,8 +1,8 @@
 use danxi_core::{
     AppError, CampusBus, CampusCredentials, CampusLifeService, CampusLocation, CampusLoginResult,
     CampusSession, CampusStatus, DiningCrowdedness, EmptyClassroom, EvaluationCourseDetail,
-    EvaluationCourseGroup, EvaluationReview, ForumHole, ForumThreadPage, HoleSortOrder,
-    LibraryOccupancy, SessionManager, SessionStatus,
+    EvaluationCourseGroup, EvaluationReview, ForumDivision, ForumFloor, ForumHole, ForumTag,
+    ForumThreadPage, HoleSortOrder, LibraryOccupancy, SessionManager, SessionStatus,
 };
 use serde::Deserialize;
 use std::sync::{
@@ -471,6 +471,120 @@ pub async fn load_forum_thread(
 }
 
 #[tauri::command]
+pub async fn load_forum_divisions(
+    manager: State<'_, SessionManager>,
+    campus: State<'_, CampusSession>,
+    request: CommunityNetworkRequest,
+) -> Result<Vec<ForumDivision>, danxi_core::AppError> {
+    manager
+        .load_divisions(Some(campus.inner()), request.use_webvpn)
+        .await
+}
+
+#[tauri::command]
+pub async fn load_forum_tags(
+    manager: State<'_, SessionManager>,
+    campus: State<'_, CampusSession>,
+    request: CommunityNetworkRequest,
+) -> Result<Vec<ForumTag>, danxi_core::AppError> {
+    manager
+        .load_tags(Some(campus.inner()), request.use_webvpn)
+        .await
+}
+
+#[tauri::command]
+pub async fn create_forum_hole(
+    manager: State<'_, SessionManager>,
+    campus: State<'_, CampusSession>,
+    request: CreateForumHoleRequest,
+) -> Result<(), danxi_core::AppError> {
+    manager
+        .create_hole(
+            request.division_id,
+            &request.content,
+            &request.tags,
+            Some(campus.inner()),
+            request.use_webvpn,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn create_forum_floor(
+    manager: State<'_, SessionManager>,
+    campus: State<'_, CampusSession>,
+    request: CreateForumFloorRequest,
+) -> Result<(), danxi_core::AppError> {
+    manager
+        .create_floor(
+            request.hole_id,
+            &request.content,
+            Some(campus.inner()),
+            request.use_webvpn,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn react_forum_floor(
+    manager: State<'_, SessionManager>,
+    campus: State<'_, CampusSession>,
+    request: ReactForumFloorRequest,
+) -> Result<ForumFloor, danxi_core::AppError> {
+    manager
+        .react_floor(
+            request.floor_id,
+            request.reaction,
+            Some(campus.inner()),
+            request.use_webvpn,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn load_forum_favorite_ids(
+    manager: State<'_, SessionManager>,
+    campus: State<'_, CampusSession>,
+    request: CommunityNetworkRequest,
+) -> Result<Vec<i64>, danxi_core::AppError> {
+    manager
+        .favorite_hole_ids(Some(campus.inner()), request.use_webvpn)
+        .await
+}
+
+#[tauri::command]
+pub async fn set_forum_favorite(
+    manager: State<'_, SessionManager>,
+    campus: State<'_, CampusSession>,
+    request: SetForumFavoriteRequest,
+) -> Result<(), danxi_core::AppError> {
+    manager
+        .set_favorite(
+            request.hole_id,
+            request.favorite,
+            Some(campus.inner()),
+            request.use_webvpn,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn report_forum_floor(
+    manager: State<'_, SessionManager>,
+    campus: State<'_, CampusSession>,
+    request: ReportForumFloorRequest,
+) -> Result<(), danxi_core::AppError> {
+    manager
+        .report_floor(
+            request.floor_id,
+            &request.reason,
+            Some(campus.inner()),
+            request.use_webvpn,
+        )
+        .await
+}
+
+#[tauri::command]
 pub async fn search_evaluation_courses(
     manager: State<'_, SessionManager>,
     campus: State<'_, CampusSession>,
@@ -551,6 +665,53 @@ pub struct ForumThreadRequest {
     pub hole_id: i64,
     pub offset: Option<u32>,
     pub size: Option<u32>,
+    #[serde(default = "default_use_webvpn")]
+    pub use_webvpn: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateForumHoleRequest {
+    pub division_id: i64,
+    pub content: String,
+    #[serde(default)]
+    pub tags: Vec<ForumTag>,
+    #[serde(default = "default_use_webvpn")]
+    pub use_webvpn: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateForumFloorRequest {
+    pub hole_id: i64,
+    pub content: String,
+    #[serde(default = "default_use_webvpn")]
+    pub use_webvpn: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactForumFloorRequest {
+    pub floor_id: i64,
+    pub reaction: i8,
+    #[serde(default = "default_use_webvpn")]
+    pub use_webvpn: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetForumFavoriteRequest {
+    pub hole_id: i64,
+    pub favorite: bool,
+    #[serde(default = "default_use_webvpn")]
+    pub use_webvpn: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportForumFloorRequest {
+    pub floor_id: i64,
+    pub reason: String,
     #[serde(default = "default_use_webvpn")]
     pub use_webvpn: bool,
 }

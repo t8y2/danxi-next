@@ -10,7 +10,11 @@ import type {
   EvaluationCourseDetail,
   EvaluationCourseGroup,
   EvaluationReview,
+  ForumDivision,
+  ForumFloor,
   ForumHole,
+  ForumReaction,
+  ForumTag,
   ForumThreadPage,
   HoleListQuery,
   SessionStatus,
@@ -59,6 +63,35 @@ export interface BackendTransport {
     size?: number,
     options?: CommunityNetworkOptions,
   ): Promise<ForumThreadPage>;
+  loadForumDivisions(options?: CommunityNetworkOptions): Promise<ForumDivision[]>;
+  loadForumTags(options?: CommunityNetworkOptions): Promise<ForumTag[]>;
+  createForumHole(
+    divisionId: number,
+    content: string,
+    tags: ForumTag[],
+    options?: CommunityNetworkOptions,
+  ): Promise<void>;
+  createForumFloor(
+    holeId: number,
+    content: string,
+    options?: CommunityNetworkOptions,
+  ): Promise<void>;
+  reactForumFloor(
+    floorId: number,
+    reaction: ForumReaction,
+    options?: CommunityNetworkOptions,
+  ): Promise<ForumFloor>;
+  loadForumFavoriteIds(options?: CommunityNetworkOptions): Promise<number[]>;
+  setForumFavorite(
+    holeId: number,
+    favorite: boolean,
+    options?: CommunityNetworkOptions,
+  ): Promise<void>;
+  reportForumFloor(
+    floorId: number,
+    reason: string,
+    options?: CommunityNetworkOptions,
+  ): Promise<void>;
   searchEvaluationCourses(
     query: string,
     page?: number,
@@ -199,6 +232,61 @@ class TauriTransport implements BackendTransport {
   ) {
     return invoke<ForumThreadPage>("load_forum_thread", {
       request: { holeId, offset, size, ...networkOptions(options) },
+    });
+  }
+
+  loadForumDivisions(options?: CommunityNetworkOptions) {
+    return invoke<ForumDivision[]>("load_forum_divisions", {
+      request: networkOptions(options),
+    });
+  }
+
+  loadForumTags(options?: CommunityNetworkOptions) {
+    return invoke<ForumTag[]>("load_forum_tags", { request: networkOptions(options) });
+  }
+
+  createForumHole(
+    divisionId: number,
+    content: string,
+    tags: ForumTag[],
+    options?: CommunityNetworkOptions,
+  ) {
+    return invoke<void>("create_forum_hole", {
+      request: { divisionId, content, tags, ...networkOptions(options) },
+    });
+  }
+
+  createForumFloor(holeId: number, content: string, options?: CommunityNetworkOptions) {
+    return invoke<void>("create_forum_floor", {
+      request: { holeId, content, ...networkOptions(options) },
+    });
+  }
+
+  reactForumFloor(
+    floorId: number,
+    reaction: ForumReaction,
+    options?: CommunityNetworkOptions,
+  ) {
+    return invoke<ForumFloor>("react_forum_floor", {
+      request: { floorId, reaction, ...networkOptions(options) },
+    });
+  }
+
+  loadForumFavoriteIds(options?: CommunityNetworkOptions) {
+    return invoke<number[]>("load_forum_favorite_ids", {
+      request: networkOptions(options),
+    });
+  }
+
+  setForumFavorite(holeId: number, favorite: boolean, options?: CommunityNetworkOptions) {
+    return invoke<void>("set_forum_favorite", {
+      request: { holeId, favorite, ...networkOptions(options) },
+    });
+  }
+
+  reportForumFloor(floorId: number, reason: string, options?: CommunityNetworkOptions) {
+    return invoke<void>("report_forum_floor", {
+      request: { floorId, reason, ...networkOptions(options) },
     });
   }
 
@@ -352,6 +440,71 @@ class WebTransport implements BackendTransport {
     return this.get<ForumThreadPage>(`/v1/forum/holes/${holeId}?${params.toString()}`);
   }
 
+  loadForumDivisions(options?: CommunityNetworkOptions) {
+    return this.get<ForumDivision[]>(
+      `/v1/forum/divisions?use_webvpn=${networkOptions(options).useWebvpn}`,
+    );
+  }
+
+  loadForumTags(options?: CommunityNetworkOptions) {
+    return this.get<ForumTag[]>(
+      `/v1/forum/tags?use_webvpn=${networkOptions(options).useWebvpn}`,
+    );
+  }
+
+  createForumHole(
+    divisionId: number,
+    content: string,
+    tags: ForumTag[],
+    options?: CommunityNetworkOptions,
+  ) {
+    return this.post<void>("/v1/forum/holes", {
+      divisionId,
+      content,
+      tags,
+      ...networkOptions(options),
+    });
+  }
+
+  createForumFloor(holeId: number, content: string, options?: CommunityNetworkOptions) {
+    return this.post<void>(`/v1/forum/holes/${holeId}/floors`, {
+      content,
+      ...networkOptions(options),
+    });
+  }
+
+  reactForumFloor(
+    floorId: number,
+    reaction: ForumReaction,
+    options?: CommunityNetworkOptions,
+  ) {
+    return this.post<ForumFloor>(`/v1/forum/floors/${floorId}/reaction`, {
+      reaction,
+      ...networkOptions(options),
+    });
+  }
+
+  loadForumFavoriteIds(options?: CommunityNetworkOptions) {
+    return this.get<number[]>(
+      `/v1/forum/favorites?use_webvpn=${networkOptions(options).useWebvpn}`,
+    );
+  }
+
+  setForumFavorite(holeId: number, favorite: boolean, options?: CommunityNetworkOptions) {
+    const body = { holeId, ...networkOptions(options) };
+    return favorite
+      ? this.post<void>("/v1/forum/favorites", body)
+      : this.delete<void>("/v1/forum/favorites", body);
+  }
+
+  reportForumFloor(floorId: number, reason: string, options?: CommunityNetworkOptions) {
+    return this.post<void>("/v1/forum/reports", {
+      floorId,
+      reason,
+      ...networkOptions(options),
+    });
+  }
+
   searchEvaluationCourses(
     query: string,
     page = 1,
@@ -428,6 +581,10 @@ class WebTransport implements BackendTransport {
 
   private post<T>(path: string, body: unknown): Promise<T> {
     return this.request<T>(path, { method: "POST", body: JSON.stringify(body) });
+  }
+
+  private delete<T>(path: string, body: unknown): Promise<T> {
+    return this.request<T>(path, { method: "DELETE", body: JSON.stringify(body) });
   }
 }
 
@@ -520,6 +677,59 @@ class PreviewTransport implements BackendTransport {
     _size?: number,
     _options?: CommunityNetworkOptions,
   ): Promise<ForumThreadPage> {
+    return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
+  }
+
+  loadForumDivisions(_options?: CommunityNetworkOptions): Promise<ForumDivision[]> {
+    return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
+  }
+
+  loadForumTags(_options?: CommunityNetworkOptions): Promise<ForumTag[]> {
+    return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
+  }
+
+  createForumHole(
+    _divisionId: number,
+    _content: string,
+    _tags: ForumTag[],
+    _options?: CommunityNetworkOptions,
+  ): Promise<void> {
+    return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
+  }
+
+  createForumFloor(
+    _holeId: number,
+    _content: string,
+    _options?: CommunityNetworkOptions,
+  ): Promise<void> {
+    return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
+  }
+
+  reactForumFloor(
+    _floorId: number,
+    _reaction: ForumReaction,
+    _options?: CommunityNetworkOptions,
+  ): Promise<ForumFloor> {
+    return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
+  }
+
+  loadForumFavoriteIds(_options?: CommunityNetworkOptions): Promise<number[]> {
+    return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
+  }
+
+  setForumFavorite(
+    _holeId: number,
+    _favorite: boolean,
+    _options?: CommunityNetworkOptions,
+  ): Promise<void> {
+    return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
+  }
+
+  reportForumFloor(
+    _floorId: number,
+    _reason: string,
+    _options?: CommunityNetworkOptions,
+  ): Promise<void> {
     return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
   }
 
