@@ -42,6 +42,7 @@ pub fn run() {
             commands::session::session_status,
             commands::session::load_forum_holes,
             commands::session::load_forum_thread,
+            commands::session::load_forum_floor,
             commands::session::load_forum_divisions,
             commands::session::load_forum_tags,
             commands::session::create_forum_hole,

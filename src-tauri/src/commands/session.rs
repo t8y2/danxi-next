@@ -482,6 +482,17 @@ pub async fn load_forum_divisions(
 }
 
 #[tauri::command]
+pub async fn load_forum_floor(
+    manager: State<'_, SessionManager>,
+    campus: State<'_, CampusSession>,
+    request: ForumFloorRequest,
+) -> Result<danxi_core::ForumFloor, danxi_core::AppError> {
+    manager
+        .load_floor(request.floor_id, Some(campus.inner()), request.use_webvpn)
+        .await
+}
+
+#[tauri::command]
 pub async fn load_forum_tags(
     manager: State<'_, SessionManager>,
     campus: State<'_, CampusSession>,
@@ -665,6 +676,14 @@ pub struct ForumThreadRequest {
     pub hole_id: i64,
     pub offset: Option<u32>,
     pub size: Option<u32>,
+    #[serde(default = "default_use_webvpn")]
+    pub use_webvpn: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForumFloorRequest {
+    pub floor_id: i64,
     #[serde(default = "default_use_webvpn")]
     pub use_webvpn: bool,
 }

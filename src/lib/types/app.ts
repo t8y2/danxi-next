@@ -101,6 +101,15 @@ export interface ForumFloorPreview {
   content: string;
   anonyname: string;
   timeCreated: string;
+  mentions: ForumFloorMention[];
+}
+
+export interface ForumFloorMention {
+  floorId: number;
+  holeId: number;
+  content: string;
+  anonyname: string;
+  deleted: boolean;
 }
 
 export interface ForumFloor {
@@ -119,6 +128,7 @@ export interface ForumFloor {
   dislike: number;
   modified: number;
   fold: string[];
+  mentions: ForumFloorMention[];
 }
 
 export interface ForumHole {

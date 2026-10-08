@@ -60,6 +60,17 @@ pub struct ForumFloorPreview {
     pub content: String,
     pub anonyname: String,
     pub time_created: String,
+    pub mentions: Vec<ForumFloorMention>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForumFloorMention {
+    pub floor_id: i64,
+    pub hole_id: i64,
+    pub content: String,
+    pub anonyname: String,
+    pub deleted: bool,
 }
 
 /// One complete floor in a forum thread.
@@ -81,6 +92,7 @@ pub struct ForumFloor {
     pub dislike: i64,
     pub modified: i64,
     pub fold: Vec<String>,
+    pub mentions: Vec<ForumFloorMention>,
 }
 
 /// Hole listing item shown by the forum panel.

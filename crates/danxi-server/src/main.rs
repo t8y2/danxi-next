@@ -94,6 +94,7 @@ async fn main() {
         .route("/v1/forum/tags", get(forum_tags))
         .route("/v1/forum/holes", get(forum_holes).post(forum_create_hole))
         .route("/v1/forum/holes/{hole_id}", get(forum_thread))
+        .route("/v1/forum/floors/{floor_id}", get(forum_floor))
         .route("/v1/forum/holes/{hole_id}/floors", post(forum_create_floor))
         .route(
             "/v1/forum/floors/{floor_id}/reaction",
@@ -644,6 +645,29 @@ struct ForumThreadQuery {
     size: Option<u32>,
     #[serde(default = "default_use_webvpn")]
     use_webvpn: bool,
+}
+
+async fn forum_floor(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+    Path(floor_id): Path<i64>,
+    Query(query): Query<ForumNetworkQuery>,
+) -> Response {
+    let Some(web_session) = state
+        .sessions
+        .resolve(session_id_from_headers(&headers).as_deref())
+    else {
+        return unauthorized();
+    };
+    let manager = web_session.manager();
+    let campus = web_session.campus().await;
+    match manager
+        .load_floor(floor_id, Some(campus.as_ref()), query.use_webvpn)
+        .await
+    {
+        Ok(floor) => Json(floor).into_response(),
+        Err(error) => error_response(&error),
+    }
 }
 
 async fn forum_thread(

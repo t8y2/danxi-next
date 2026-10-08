@@ -21,8 +21,8 @@ pub use forum::{
 pub use models::{
     CampusBus, CommunityUser, DiningCrowdedness, DiningVenueOccupancy, EmptyClassroom,
     EvaluationCourseDetail, EvaluationCourseGroup, EvaluationRating, EvaluationReview,
-    ForumDivision, ForumFloor, ForumFloorPreview, ForumHole, ForumTag, ForumThreadPage,
-    HoleSortOrder, LibraryOccupancy, SessionStatus, TokenPair,
+    ForumDivision, ForumFloor, ForumFloorMention, ForumFloorPreview, ForumHole, ForumTag,
+    ForumThreadPage, HoleSortOrder, LibraryOccupancy, SessionStatus, TokenPair,
 };
 pub use session::{MemorySessionStore, SessionStore};
 pub use timetable::{

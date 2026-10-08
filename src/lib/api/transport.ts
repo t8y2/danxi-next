@@ -64,6 +64,7 @@ export interface BackendTransport {
     options?: CommunityNetworkOptions,
   ): Promise<ForumThreadPage>;
   loadForumDivisions(options?: CommunityNetworkOptions): Promise<ForumDivision[]>;
+  loadForumFloor(floorId: number, options?: CommunityNetworkOptions): Promise<ForumFloor>;
   loadForumTags(options?: CommunityNetworkOptions): Promise<ForumTag[]>;
   createForumHole(
     divisionId: number,
@@ -238,6 +239,12 @@ class TauriTransport implements BackendTransport {
   loadForumDivisions(options?: CommunityNetworkOptions) {
     return invoke<ForumDivision[]>("load_forum_divisions", {
       request: networkOptions(options),
+    });
+  }
+
+  loadForumFloor(floorId: number, options?: CommunityNetworkOptions) {
+    return invoke<ForumFloor>("load_forum_floor", {
+      request: { floorId, ...networkOptions(options) },
     });
   }
 
@@ -444,6 +451,10 @@ class WebTransport implements BackendTransport {
     return this.get<ForumDivision[]>(
       `/v1/forum/divisions?use_webvpn=${networkOptions(options).useWebvpn}`,
     );
+  }
+
+  loadForumFloor(floorId: number, options?: CommunityNetworkOptions) {
+    return this.get<ForumFloor>(`/v1/forum/floors/${floorId}?use_webvpn=${networkOptions(options).useWebvpn}`);
   }
 
   loadForumTags(options?: CommunityNetworkOptions) {
@@ -681,6 +692,10 @@ class PreviewTransport implements BackendTransport {
   }
 
   loadForumDivisions(_options?: CommunityNetworkOptions): Promise<ForumDivision[]> {
+    return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
+  }
+
+  loadForumFloor(_floorId: number, _options?: CommunityNetworkOptions): Promise<ForumFloor> {
     return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
   }
 

@@ -9,8 +9,9 @@ use serde::Deserialize;
 
 use crate::{
     AppError, CampusSession, CommunityUser, EvaluationCourseDetail, EvaluationCourseGroup,
-    EvaluationRating, EvaluationReview, ForumDivision, ForumFloor, ForumFloorPreview, ForumHole,
-    ForumTag, ForumThreadPage, HoleSortOrder, SessionStatus, SessionStore, TokenPair,
+    EvaluationRating, EvaluationReview, ForumDivision, ForumFloor, ForumFloorMention,
+    ForumFloorPreview, ForumHole, ForumTag, ForumThreadPage, HoleSortOrder, SessionStatus,
+    SessionStore, TokenPair,
 };
 
 pub const DEFAULT_FORUM_BASE_URL: &str = "https://forum.fduhole.com/api";
@@ -371,6 +372,29 @@ impl ForumService {
             .json(&serde_json::json!({ "content": content }))
             .build()?;
         ensure_success(self.execute(request, campus, use_webvpn).await?)
+    }
+
+    pub async fn load_floor(
+        &self,
+        access_token: &str,
+        floor_id: i64,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<ForumFloor, AppError> {
+        if floor_id <= 0 {
+            return Err(AppError::Validation("楼层编号无效".to_owned()));
+        }
+        let request = self
+            .http
+            .get(format!("{}/floors/{floor_id}", self.forum_base))
+            .bearer_auth(access_token)
+            .build()?;
+        let response = self.execute(request, campus, use_webvpn).await?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(request_error(status));
+        }
+        Ok(response.json::<RawFloor>().await?.into())
     }
 
     pub async fn react_floor(
@@ -821,6 +845,29 @@ impl SessionManager {
                 let refreshed = self.refresh_token(&token, campus, use_webvpn).await?;
                 self.forum
                     .load_tags(&refreshed.access, campus, use_webvpn)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn load_floor(
+        &self,
+        floor_id: i64,
+        campus: Option<&CampusSession>,
+        use_webvpn: bool,
+    ) -> Result<ForumFloor, AppError> {
+        let token = self.community_token()?;
+        match self
+            .forum
+            .load_floor(&token.access, floor_id, campus, use_webvpn)
+            .await
+        {
+            Ok(floor) => Ok(floor),
+            Err(AppError::Auth(_)) => {
+                let refreshed = self.refresh_token(&token, campus, use_webvpn).await?;
+                self.forum
+                    .load_floor(&refreshed.access, floor_id, campus, use_webvpn)
                     .await
             }
             Err(error) => Err(error),
@@ -1380,6 +1427,16 @@ struct RawFloor {
     modified: Option<i64>,
     #[serde(default)]
     fold: Vec<String>,
+    mention: Option<Vec<RawFloorMention>>,
+}
+
+#[derive(Clone, Deserialize)]
+struct RawFloorMention {
+    floor_id: i64,
+    hole_id: Option<i64>,
+    content: Option<String>,
+    anonyname: Option<String>,
+    deleted: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -1484,6 +1541,24 @@ impl From<RawFloor> for ForumFloorPreview {
             content: value.content.unwrap_or_default(),
             anonyname: value.anonyname.unwrap_or_default(),
             time_created: value.time_created.unwrap_or_default(),
+            mentions: value
+                .mention
+                .unwrap_or_default()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }
+    }
+}
+
+impl From<RawFloorMention> for ForumFloorMention {
+    fn from(value: RawFloorMention) -> Self {
+        Self {
+            floor_id: value.floor_id,
+            hole_id: value.hole_id.unwrap_or_default(),
+            content: value.content.unwrap_or_default(),
+            anonyname: value.anonyname.unwrap_or_default(),
+            deleted: value.deleted.unwrap_or(false),
         }
     }
 }
@@ -1506,6 +1581,12 @@ impl From<RawFloor> for ForumFloor {
             dislike: value.dislike.unwrap_or_default(),
             modified: value.modified.unwrap_or_default(),
             fold: value.fold,
+            mentions: value
+                .mention
+                .unwrap_or_default()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
         }
     }
 }
@@ -1689,6 +1770,112 @@ fn format_term(year: Option<i64>, semester: Option<i64>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn load_floor_validates_ids_before_network_access() {
+        let service = ForumService::new().expect("forum service should initialize");
+        for floor_id in [0, -1] {
+            assert!(matches!(
+                service
+                    .load_floor("test-token", floor_id, None, false)
+                    .await,
+                Err(AppError::Validation(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn load_floor_reads_authenticated_endpoint_and_preserves_mentions() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("test server should bind");
+        let address = listener.local_addr().expect("test server address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("test request should arrive");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("test timeout");
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let length = stream
+                    .read(&mut buffer)
+                    .expect("test request should be readable");
+                if length == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..length]);
+            }
+            let request = String::from_utf8(request).expect("test request should be UTF-8");
+            assert!(request.starts_with("GET /floors/123 HTTP/1.1\r\n"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer test-token\r\n")
+            );
+            let body = r###"{"floor_id":123,"hole_id":10,"content":"##122 回复","mention":[{"floor_id":122,"hole_id":10,"content":"原文"}]}"###;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).expect("test response should be writable");
+        });
+        let mut service = ForumService::new().expect("forum service should initialize");
+        service.http = Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .expect("test client");
+        service.forum_base = format!("http://{address}");
+        let floor = service
+            .load_floor("test-token", 123, None, false)
+            .await
+            .expect("floor should load");
+        server.join().expect("test server should finish");
+        assert_eq!(floor.floor_id, 123);
+        assert_eq!(floor.mentions[0].floor_id, 122);
+    }
+
+    #[test]
+    fn floor_mentions_survive_full_and_preview_dto_conversion() {
+        let raw: RawFloor = serde_json::from_value(serde_json::json!({
+            "floor_id": 102,
+            "content": "##101 回复正文",
+            "mention": [{
+                "floor_id": 101,
+                "hole_id": 10,
+                "anonyname": "Alice",
+                "content": "被引用的正文",
+                "deleted": true
+            }]
+        }))
+        .expect("floor mention fixture should deserialize");
+
+        let preview: ForumFloorPreview = raw.clone().into();
+        let floor: ForumFloor = raw.into();
+        for mentions in [&preview.mentions, &floor.mentions] {
+            assert_eq!(mentions.len(), 1);
+            assert_eq!(mentions[0].floor_id, 101);
+            assert_eq!(mentions[0].hole_id, 10);
+            assert_eq!(mentions[0].anonyname, "Alice");
+            assert_eq!(mentions[0].content, "被引用的正文");
+            assert!(mentions[0].deleted);
+        }
+        let dto = serde_json::to_value(floor).expect("floor DTO should serialize");
+        assert_eq!(dto["mentions"][0]["floorId"], 101);
+        assert_eq!(dto["mentions"][0]["holeId"], 10);
+        assert!(dto.get("mention").is_none());
+    }
+
+    #[test]
+    fn missing_and_null_mentions_default_to_empty_lists() {
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({ "mention": null }),
+        ] {
+            let raw: RawFloor =
+                serde_json::from_value(value).expect("minimal floor should deserialize");
+            let preview: ForumFloorPreview = raw.clone().into();
+            let floor: ForumFloor = raw.into();
+            assert!(preview.mentions.is_empty());
+            assert!(floor.mentions.is_empty());
+        }
+    }
 
     #[test]
     fn login_error_maps_upstream_statuses() {

@@ -16,6 +16,10 @@
   import ForumComposer from "$lib/components/forum/ForumComposer.svelte";
   import ForumDivisionSelect from "$lib/components/forum/ForumDivisionSelect.svelte";
   import ForumFloorActions from "$lib/components/forum/ForumFloorActions.svelte";
+  import ForumContent from "$lib/components/forum/ForumContent.svelte";
+  import ForumConversation from "$lib/components/forum/ForumConversation.svelte";
+  import { ForumConversationController } from "$lib/features/forum/conversation.svelte";
+  import { forumContentExcerpt, type ForumReferenceTarget } from "$lib/features/forum/content";
   import { forum, session } from "$lib/stores/session.svelte";
   import type { ForumFloor, ForumFloorPreview, ForumHole, ForumTag } from "$lib/types/app";
 
@@ -38,6 +42,7 @@
     | null
   >(null);
   let actionNotice = $state<string | null>(null);
+  const conversation = new ForumConversationController();
 
   const listLoadThreshold = 360;
   const tagTones = [
@@ -50,6 +55,10 @@
 
   const holes = $derived(forum.state.phase === "ready" ? forum.state.holes : []);
   const compactItems = $derived(holes.slice(0, 9));
+  const excerpts = $derived(new Map(holes.map((hole) => [
+    hole.holeId,
+    forumContentExcerpt(hole.firstFloor?.content ?? "内容暂不可见"),
+  ])));
   const showListFooter = $derived(
     forum.state.phase === "ready" &&
       (forum.state.loadingMore || forum.state.moreError !== null),
@@ -74,6 +83,26 @@
     return firstFloor
       ? thread.floors.filter((floor) => floor.floorId !== firstFloor.floorId)
       : thread.floors;
+  });
+  const referenceFloors = $derived.by((): ForumReferenceTarget[] => {
+    if (!thread) return [];
+    const floors = firstFloor ? [firstFloor, ...replies] : replies;
+    return floors.map((floor, index) => ({
+      floorId: floor.floorId,
+      holeId: thread.hole.holeId,
+      content: floor.content,
+      anonyname: floor.anonyname,
+      deleted: "deleted" in floor && floor.deleted === true,
+      mentions: floor.mentions,
+      complete: "liked" in floor,
+      floorNumber: firstFloor && index === 0 ? 1 : replyFloorNumber(firstFloor ? index - 1 : index),
+    }));
+  });
+
+  $effect(() => {
+    selectedHoleId;
+    session.status.communityLoggedIn;
+    return () => conversation.close();
   });
 
   $effect(() => {
@@ -215,7 +244,7 @@
   }
 
   function excerpt(hole: ForumHole): string {
-    return (hole.firstFloor?.content ?? "内容暂不可见").replace(/\s+/g, " ").trim();
+    return excerpts.get(hole.holeId) ?? "内容暂不可见";
   }
 
   function authorName(name: string): string {
@@ -631,9 +660,14 @@
                       </p>
                     </div>
                   </header>
-                  <p
-                    class="mb-0 mt-3 whitespace-pre-wrap break-words text-[15px] leading-6 text-foreground"
-                  >{firstFloor.content}</p>
+                  <ForumContent
+                    content={firstFloor.content}
+                    mentions={firstFloor.mentions}
+                    loadedFloors={referenceFloors}
+                    onOpenReference={(floorId) => conversation.open(firstFloor.floorId, floorId, referenceFloors)}
+                    muted={"deleted" in firstFloor && firstFloor.deleted}
+                    class="mt-3"
+                  />
                   <ForumFloorActions
                     floor={firstFloor}
                     busy={"liked" in firstFloor && forum.reactingFloorIds.includes(firstFloor.floorId)}
@@ -689,11 +723,14 @@
                         {floor.fold.join(" · ")}
                       </p>
                     {/if}
-                    <p
-                      class={`mb-0 mt-2.5 whitespace-pre-wrap break-words text-[14px] leading-5 ${
-                        floor.deleted ? "text-muted-foreground" : "text-foreground/92"
-                      }`}
-                    >{floor.content}</p>
+                    <ForumContent
+                      content={floor.content}
+                      mentions={floor.mentions}
+                      loadedFloors={referenceFloors}
+                      onOpenReference={(floorId) => conversation.open(floor.floorId, floorId, referenceFloors)}
+                      muted={floor.deleted}
+                      class="mt-2.5"
+                    />
                     <ForumFloorActions
                       {floor}
                       busy={forum.reactingFloorIds.includes(floor.floorId)}
@@ -808,6 +845,8 @@
     {/if}
   </section>
 {/if}
+
+<ForumConversation controller={conversation} />
 
 {#if composer}
   <ForumComposer

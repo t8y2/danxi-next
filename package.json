@@ -20,6 +20,7 @@
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "check:rust": "cargo check --workspace",
     "check:all": "pnpm check && pnpm check:rust",
+    "test:forum": "node --experimental-strip-types --test scripts/forum-*.test.mjs",
     "release:check": "node scripts/check-release-version.mjs",
     "tauri": "tauri"
   },
@@ -30,6 +31,8 @@
     "@tauri-apps/plugin-opener": "^2.6.0",
     "bits-ui": "^2.19.3",
     "clsx": "^2.1.1",
+    "entities": "^8.1.0",
+    "marked": "^18.1.0",
     "tailwind-merge": "^3.7.0",
     "tailwind-variants": "^3.3.1"
   },
