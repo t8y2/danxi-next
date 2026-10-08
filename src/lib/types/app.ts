@@ -159,6 +159,12 @@ export interface HoleListQuery {
   before?: string;
 }
 
+export interface ForumSearchPage {
+  floors: ForumFloor[];
+  offset: number;
+  nextOffset: number | null;
+}
+
 export type ForumReaction = -1 | 0 | 1;
 
 export interface EvaluationCourseGroup {

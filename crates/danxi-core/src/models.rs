@@ -124,6 +124,14 @@ pub struct ForumThreadPage {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ForumSearchPage {
+    pub floors: Vec<ForumFloor>,
+    pub offset: u32,
+    pub next_offset: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EvaluationCourseGroup {
     pub group_id: i64,
     pub name: String,

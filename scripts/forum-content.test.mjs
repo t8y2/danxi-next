@@ -79,7 +79,7 @@ test("references use loaded floors first, then out-of-page mention metadata", ()
 test("the Svelte component renders safe markup and hides deleted reference content", async () => {
   const { createServer } = await import("vite");
   const server = await createServer({
-    server: { middlewareMode: true, hmr: false },
+    server: { middlewareMode: true, hmr: false, ws: false },
     appType: "custom",
     logLevel: "error",
   });

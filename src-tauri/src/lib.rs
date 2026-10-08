@@ -41,6 +41,7 @@ pub fn run() {
             commands::session::load_empty_classrooms,
             commands::session::session_status,
             commands::session::load_forum_holes,
+            commands::session::search_forum_floors,
             commands::session::load_forum_thread,
             commands::session::load_forum_floor,
             commands::session::load_forum_divisions,

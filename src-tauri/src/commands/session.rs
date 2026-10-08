@@ -436,6 +436,32 @@ pub async fn session_status(
 }
 
 #[tauri::command]
+pub async fn search_forum_floors(
+    manager: State<'_, SessionManager>,
+    campus: State<'_, CampusSession>,
+    request: ForumSearchRequest,
+) -> Result<danxi_core::ForumSearchPage, danxi_core::AppError> {
+    manager
+        .search_floors(
+            &request.query,
+            request.offset,
+            Some(campus.inner()),
+            request.use_webvpn,
+        )
+        .await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForumSearchRequest {
+    pub query: String,
+    #[serde(default)]
+    pub offset: u32,
+    #[serde(default = "default_use_webvpn")]
+    pub use_webvpn: bool,
+}
+
+#[tauri::command]
 pub async fn load_forum_holes(
     manager: State<'_, SessionManager>,
     campus: State<'_, CampusSession>,

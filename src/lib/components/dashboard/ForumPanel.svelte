@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import {
     ArrowLeft,
     ArrowRight,
@@ -18,6 +19,9 @@
   import ForumFloorActions from "$lib/components/forum/ForumFloorActions.svelte";
   import ForumContent from "$lib/components/forum/ForumContent.svelte";
   import ForumConversation from "$lib/components/forum/ForumConversation.svelte";
+  import ForumSearchBar from "$lib/components/forum/ForumSearchBar.svelte";
+  import ForumSearchResults from "$lib/components/forum/ForumSearchResults.svelte";
+  import { forumSearch } from "$lib/features/forum/search.svelte";
   import { ForumConversationController } from "$lib/features/forum/conversation.svelte";
   import { forumContentExcerpt, type ForumReferenceTarget } from "$lib/features/forum/content";
   import { forum, session } from "$lib/stores/session.svelte";
@@ -34,6 +38,7 @@
   let listViewport = $state<HTMLDivElement>();
   let threadViewport = $state<HTMLDivElement>();
   let listViewportHeight = $state(640);
+  let browseScrollTop = 0;
   let selectedDivisionId = $state<number | null>(null);
   let composer = $state<
     | { mode: "post" }
@@ -114,8 +119,13 @@
       void forum.loadMeta();
       void forum.loadFavorites();
     } else {
+      forumSearch.clear();
       forum.requireLogin();
     }
+  });
+
+  $effect(() => {
+    if (listViewport) listViewport.scrollTop = untrack(() => browseScrollTop);
   });
 
   $effect(() => {
@@ -188,23 +198,27 @@
   function selectOrder(next: "time_updated" | "time_created") {
     if (order === next) return;
     order = next;
+    browseScrollTop = 0;
     if (listViewport) listViewport.scrollTop = 0;
     void forum.load(10, next, selectedDivisionId);
   }
 
   function selectDivision(value: number | null) {
     selectedDivisionId = value;
+    browseScrollTop = 0;
     if (listViewport) listViewport.scrollTop = 0;
     void forum.load(10, order, selectedDivisionId);
   }
 
   function reloadList() {
+    browseScrollTop = 0;
     if (listViewport) listViewport.scrollTop = 0;
     void forum.load(10, order, selectedDivisionId);
   }
 
   function handleListScroll(event: Event) {
     const element = event.currentTarget as HTMLDivElement;
+    if (element.clientHeight) browseScrollTop = element.scrollTop;
     listViewportHeight = element.clientHeight;
     if (element.scrollHeight - element.scrollTop - element.clientHeight < listLoadThreshold) {
       void forum.loadMoreHoles();
@@ -379,145 +393,150 @@
         <aside
           class={`min-h-0 flex-col bg-card ${forum.detail.phase === "idle" ? "flex" : "hidden lg:flex"}`}
         >
-          <div class="shrink-0 border-b border-border px-3 py-2">
-            <div class="flex items-center gap-1">
-              <Button
-                variant={order === "time_updated" ? "secondary" : "ghost"}
-                size="sm"
-                onclick={() => selectOrder("time_updated")}>最近回复</Button
-              >
-              <Button
-                variant={order === "time_created" ? "secondary" : "ghost"}
-                size="sm"
-                onclick={() => selectOrder("time_created")}>最新发布</Button
-              >
-              <Button
-                variant="ghost"
-                size="icon"
-                class="ml-auto size-8"
-                aria-label="刷新讨论"
-                onclick={reloadList}
-              >
-                <RefreshCw size={14} />
-              </Button>
-              <Button size="sm" onclick={openPostComposer}>
-                <PenLine size={14} /> 发帖
-              </Button>
-            </div>
-            <div class="mt-2">
-              <ForumDivisionSelect
-                value={selectedDivisionId}
-                divisions={forum.meta.phase === "ready" ? forum.meta.divisions : []}
-                homepageLabel="首页推荐"
-                compact
-                onValueChange={selectDivision}
-              />
-            </div>
-          </div>
-
-          {#if forum.state.phase === "loading" || forum.state.phase === "idle"}
-            <div class="min-h-0 flex-1 overflow-hidden">
-              {#each Array(7) as _}
-                <div class="border-b border-border px-4 py-4">
-                  <div class="flex items-center gap-2">
-                    <div class="h-4 w-14 animate-pulse rounded bg-muted"></div>
-                    <div class="h-3 w-16 animate-pulse rounded bg-muted"></div>
-                  </div>
-                  <div class="mt-3 h-3.5 w-full animate-pulse rounded bg-muted"></div>
-                  <div class="mt-2 h-3.5 w-3/4 animate-pulse rounded bg-muted"></div>
-                </div>
-              {/each}
-            </div>
-          {:else if forum.state.phase === "error"}
-            <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-              <p class="m-0 text-sm leading-6 text-muted-foreground">{forum.state.message}</p>
-              <Button
-                variant="outline"
-                size="sm"
-                onclick={() => forum.load(10, order, selectedDivisionId)}
-              >
-                <RefreshCw size={14} /> 重试
-              </Button>
-            </div>
+          <ForumSearchBar controller={forumSearch} onOpenHole={selectHole} onSearch={() => forum.closeDetail()} />
+          {#if forumSearch.query}
+            <ForumSearchResults controller={forumSearch} {selectedHoleId} onOpenHole={selectHole} {onLogin} />
           {:else}
-            <div
-              bind:this={listViewport}
-              class="min-h-0 flex-1 overflow-y-auto overscroll-contain"
-              onscroll={handleListScroll}
-            >
-              <div>
-                {#each holes as hole (hole.holeId)}
-                  {@const isSelected = selectedHoleId === hole.holeId}
-                  <button
-                    type="button"
-                    aria-current={isSelected ? "true" : undefined}
-                    class={`forum-list-item focus-ring group relative flex w-full flex-col overflow-hidden border-b border-border px-4 py-3.5 text-left transition-colors ${
-                      isSelected
-                        ? "bg-primary/[0.11] hover:bg-primary/[0.11]"
-                        : "bg-card hover:bg-muted/55"
-                    }`}
-                    onclick={() => selectHole(hole.holeId)}
-                  >
-                    <span
-                      aria-hidden="true"
-                      class={`absolute inset-y-0 left-0 w-[3px] bg-primary transition-opacity ${isSelected ? "opacity-100" : "opacity-0"}`}
-                    ></span>
-                    <div class="flex shrink-0 items-center gap-2">
-                      <span
-                        class={`text-[11px] font-medium tabular-nums ${isSelected ? "text-primary" : "text-muted-foreground"}`}
-                        >#{hole.holeId}</span
-                      >
-                      {#if hole.tags[0]}
-                        <Badge
-                          variant="outline"
-                          class={`max-w-30 truncate px-2 py-0.5 font-medium ${tagTone(hole.tags[0].name)}`}
-                        >
-                          {hole.tags[0].name}
-                        </Badge>
-                      {/if}
-                      <span class="ml-auto shrink-0 text-[11px] text-muted-foreground">
-                        {relativeTime(hole.timeUpdated)}
-                      </span>
+            <div class="shrink-0 border-b border-border px-3 py-2">
+              <div class="flex items-center gap-1">
+                <Button
+                  variant={order === "time_updated" ? "secondary" : "ghost"}
+                  size="sm"
+                  onclick={() => selectOrder("time_updated")}>最近回复</Button
+                >
+                <Button
+                  variant={order === "time_created" ? "secondary" : "ghost"}
+                  size="sm"
+                  onclick={() => selectOrder("time_created")}>最新发布</Button
+                >
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="ml-auto size-8"
+                  aria-label="刷新讨论"
+                  onclick={reloadList}
+                >
+                  <RefreshCw size={14} />
+                </Button>
+                <Button size="sm" onclick={openPostComposer}>
+                  <PenLine size={14} /> 发帖
+                </Button>
+              </div>
+              <div class="mt-2">
+                <ForumDivisionSelect
+                  value={selectedDivisionId}
+                  divisions={forum.meta.phase === "ready" ? forum.meta.divisions : []}
+                  homepageLabel="首页推荐"
+                  compact
+                  onValueChange={selectDivision}
+                />
+              </div>
+            </div>
+
+            {#if forum.state.phase === "loading" || forum.state.phase === "idle"}
+              <div class="min-h-0 flex-1 overflow-hidden">
+                {#each Array(7) as _}
+                  <div class="border-b border-border px-4 py-4">
+                    <div class="flex items-center gap-2">
+                      <div class="h-4 w-14 animate-pulse rounded bg-muted"></div>
+                      <div class="h-3 w-16 animate-pulse rounded bg-muted"></div>
                     </div>
-                    <p
-                      class="mb-0 mt-2.5 line-clamp-3 min-h-0 text-[14px] leading-[1.55] text-foreground/92"
-                    >
-                      {excerpt(hole)}
-                    </p>
-                    <div
-                      class="mt-2.5 flex shrink-0 items-center gap-3 text-[11px] text-muted-foreground"
-                    >
-                      <span class="flex items-center gap-1"
-                        ><MessageCircle size={12} />{hole.reply}</span
-                      >
-                      <span class="flex items-center gap-1"
-                        ><Eye size={12} />{compactNumber(hole.view)}</span
-                      >
-                      <ChevronRight
-                        size={14}
-                        class={`ml-auto transition group-hover:translate-x-0.5 group-hover:opacity-80 ${isSelected ? "text-primary opacity-100" : "opacity-35"}`}
-                      />
-                    </div>
-                  </button>
-                {/each}
-                {#if showListFooter && forum.state.phase === "ready"}
-                  <div class="flex h-12 items-center justify-center border-t border-border text-xs text-muted-foreground">
-                    {#if forum.state.loadingMore}
-                      <span class="flex items-center gap-2">
-                        <LoaderCircle class="animate-spin" size={13} /> 加载更多讨论
-                      </span>
-                    {:else if forum.state.moreError}
-                      <Button variant="ghost" size="sm" onclick={() => forum.retryMoreHoles()}>
-                        加载失败，点击重试
-                      </Button>
-                    {/if}
+                    <div class="mt-3 h-3.5 w-full animate-pulse rounded bg-muted"></div>
+                    <div class="mt-2 h-3.5 w-3/4 animate-pulse rounded bg-muted"></div>
                   </div>
+                {/each}
+              </div>
+            {:else if forum.state.phase === "error"}
+              <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+                <p class="m-0 text-sm leading-6 text-muted-foreground">{forum.state.message}</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onclick={() => forum.load(10, order, selectedDivisionId)}
+                >
+                  <RefreshCw size={14} /> 重试
+                </Button>
+              </div>
+            {:else}
+              <div
+                bind:this={listViewport}
+                class="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+                onscroll={handleListScroll}
+              >
+                <div>
+                  {#each holes as hole (hole.holeId)}
+                    {@const isSelected = selectedHoleId === hole.holeId}
+                    <button
+                      type="button"
+                      aria-current={isSelected ? "true" : undefined}
+                      class={`forum-list-item focus-ring group relative flex w-full flex-col overflow-hidden border-b border-border px-4 py-3.5 text-left transition-colors ${
+                        isSelected
+                          ? "bg-primary/[0.11] hover:bg-primary/[0.11]"
+                          : "bg-card hover:bg-muted/55"
+                      }`}
+                      onclick={() => selectHole(hole.holeId)}
+                    >
+                      <span
+                        aria-hidden="true"
+                        class={`absolute inset-y-0 left-0 w-[3px] bg-primary transition-opacity ${isSelected ? "opacity-100" : "opacity-0"}`}
+                      ></span>
+                      <div class="flex shrink-0 items-center gap-2">
+                        <span
+                          class={`text-[11px] font-medium tabular-nums ${isSelected ? "text-primary" : "text-muted-foreground"}`}
+                          >#{hole.holeId}</span
+                        >
+                        {#if hole.tags[0]}
+                          <Badge
+                            variant="outline"
+                            class={`max-w-30 truncate px-2 py-0.5 font-medium ${tagTone(hole.tags[0].name)}`}
+                          >
+                            {hole.tags[0].name}
+                          </Badge>
+                        {/if}
+                        <span class="ml-auto shrink-0 text-[11px] text-muted-foreground">
+                          {relativeTime(hole.timeUpdated)}
+                        </span>
+                      </div>
+                      <p
+                        class="mb-0 mt-2.5 line-clamp-3 min-h-0 text-[14px] leading-[1.55] text-foreground/92"
+                      >
+                        {excerpt(hole)}
+                      </p>
+                      <div
+                        class="mt-2.5 flex shrink-0 items-center gap-3 text-[11px] text-muted-foreground"
+                      >
+                        <span class="flex items-center gap-1"
+                          ><MessageCircle size={12} />{hole.reply}</span
+                        >
+                        <span class="flex items-center gap-1"
+                          ><Eye size={12} />{compactNumber(hole.view)}</span
+                        >
+                        <ChevronRight
+                          size={14}
+                          class={`ml-auto transition group-hover:translate-x-0.5 group-hover:opacity-80 ${isSelected ? "text-primary opacity-100" : "opacity-35"}`}
+                        />
+                      </div>
+                    </button>
+                  {/each}
+                  {#if showListFooter && forum.state.phase === "ready"}
+                    <div class="flex h-12 items-center justify-center border-t border-border text-xs text-muted-foreground">
+                      {#if forum.state.loadingMore}
+                        <span class="flex items-center gap-2">
+                          <LoaderCircle class="animate-spin" size={13} /> 加载更多讨论
+                        </span>
+                      {:else if forum.state.moreError}
+                        <Button variant="ghost" size="sm" onclick={() => forum.retryMoreHoles()}>
+                          加载失败，点击重试
+                        </Button>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+                {#if holes.length === 0}
+                  <p class="m-0 px-4 py-12 text-center text-sm text-muted-foreground">暂无讨论</p>
                 {/if}
               </div>
-              {#if holes.length === 0}
-                <p class="m-0 px-4 py-12 text-center text-sm text-muted-foreground">暂无讨论</p>
-              {/if}
-            </div>
+            {/if}
           {/if}
         </aside>
 

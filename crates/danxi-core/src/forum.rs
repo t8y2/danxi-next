@@ -7,6 +7,8 @@ use std::{
 use reqwest::{Client, Request, Response, StatusCode, header, redirect::Policy};
 use serde::Deserialize;
 
+mod search;
+
 use crate::{
     AppError, CampusSession, CommunityUser, EvaluationCourseDetail, EvaluationCourseGroup,
     EvaluationRating, EvaluationReview, ForumDivision, ForumFloor, ForumFloorMention,

@@ -14,6 +14,7 @@ import type {
   ForumFloor,
   ForumHole,
   ForumReaction,
+  ForumSearchPage,
   ForumTag,
   ForumThreadPage,
   HoleListQuery,
@@ -65,6 +66,7 @@ export interface BackendTransport {
   ): Promise<ForumThreadPage>;
   loadForumDivisions(options?: CommunityNetworkOptions): Promise<ForumDivision[]>;
   loadForumFloor(floorId: number, options?: CommunityNetworkOptions): Promise<ForumFloor>;
+  searchForumFloors(query: string, offset?: number, options?: CommunityNetworkOptions): Promise<ForumSearchPage>;
   loadForumTags(options?: CommunityNetworkOptions): Promise<ForumTag[]>;
   createForumHole(
     divisionId: number,
@@ -245,6 +247,12 @@ class TauriTransport implements BackendTransport {
   loadForumFloor(floorId: number, options?: CommunityNetworkOptions) {
     return invoke<ForumFloor>("load_forum_floor", {
       request: { floorId, ...networkOptions(options) },
+    });
+  }
+
+  searchForumFloors(query: string, offset = 0, options?: CommunityNetworkOptions) {
+    return invoke<ForumSearchPage>("search_forum_floors", {
+      request: { query, offset, ...networkOptions(options) },
     });
   }
 
@@ -455,6 +463,11 @@ class WebTransport implements BackendTransport {
 
   loadForumFloor(floorId: number, options?: CommunityNetworkOptions) {
     return this.get<ForumFloor>(`/v1/forum/floors/${floorId}?use_webvpn=${networkOptions(options).useWebvpn}`);
+  }
+
+  searchForumFloors(query: string, offset = 0, options?: CommunityNetworkOptions) {
+    const params = new URLSearchParams({ query, offset: String(offset), use_webvpn: String(networkOptions(options).useWebvpn) });
+    return this.get<ForumSearchPage>(`/v1/forum/search?${params.toString()}`);
   }
 
   loadForumTags(options?: CommunityNetworkOptions) {
@@ -696,6 +709,10 @@ class PreviewTransport implements BackendTransport {
   }
 
   loadForumFloor(_floorId: number, _options?: CommunityNetworkOptions): Promise<ForumFloor> {
+    return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
+  }
+
+  searchForumFloors(_query: string, _offset = 0, _options?: CommunityNetworkOptions): Promise<ForumSearchPage> {
     return Promise.reject(new TransportError("预览模式下不可用，请启动后端网关", "unsupported"));
   }
 

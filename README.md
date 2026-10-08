@@ -34,10 +34,12 @@ pnpm check
 pnpm build
 pnpm test:forum
 cargo check --workspace
-cargo test -p danxi-core forum::tests
+cargo test -p danxi-core forum::
 ```
 
 `pnpm test:forum` 使用 Node.js 22.12+ 验证茶楼正文、引用链和链接安全边界。点击引用可查看对话上下文，按需读取跨页楼层；主列表保持楼层顺序，对话缩进最多两级，不将当前分页冒充完整讨论。
+
+茶楼顶部支持回车搜索关键词，或输入 `#帖子编号` 直达帖子。搜索通过官方 `/floors/search` 接口按页读取命中的楼层，显示回复摘要及所属帖子，不是对当前列表做本地过滤。搜索覆盖当前账号可访问的茶楼内容，不沿用首页的分区与排序条件；点击结果查看帖子，返回保留关键词、结果和滚动位置。搜索状态只保存在本次运行内存中，不持久化搜索历史。Web 与桌面共用 Rust 搜索逻辑和 DTO，凭证仍由后端管理。
 
 正文支持 Markdown 和 `##楼层ID` 引用；图片仅加载 HTTPS 地址，外部链接在系统浏览器或新标签页打开，不执行帖子中的 HTML。`dx_*` 与旧版 `danxi_*` 是旦夕表情标识，按[官方配置](https://danxi-static.fduhole.com/tmp_wait_for_json_editor.toml)的 `https://static.fduhole.com/stickers/dx_*.webp` 资源路径解析，不能当作普通相对网址。
 

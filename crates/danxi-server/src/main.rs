@@ -93,6 +93,7 @@ async fn main() {
         .route("/v1/forum/divisions", get(forum_divisions))
         .route("/v1/forum/tags", get(forum_tags))
         .route("/v1/forum/holes", get(forum_holes).post(forum_create_hole))
+        .route("/v1/forum/search", get(forum_search))
         .route("/v1/forum/holes/{hole_id}", get(forum_thread))
         .route("/v1/forum/floors/{floor_id}", get(forum_floor))
         .route("/v1/forum/holes/{hole_id}/floors", post(forum_create_floor))
@@ -592,6 +593,42 @@ async fn forum_tags(
         .await
     {
         Ok(tags) => Json(tags).into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+#[derive(Deserialize)]
+struct ForumSearchQuery {
+    query: String,
+    #[serde(default)]
+    offset: u32,
+    #[serde(default = "default_use_webvpn")]
+    use_webvpn: bool,
+}
+
+async fn forum_search(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<ForumSearchQuery>,
+) -> Response {
+    let Some(web_session) = state
+        .sessions
+        .resolve(session_id_from_headers(&headers).as_deref())
+    else {
+        return unauthorized();
+    };
+    let manager = web_session.manager();
+    let campus = web_session.campus().await;
+    match manager
+        .search_floors(
+            &query.query,
+            query.offset,
+            Some(campus.as_ref()),
+            query.use_webvpn,
+        )
+        .await
+    {
+        Ok(page) => Json(page).into_response(),
         Err(error) => error_response(&error),
     }
 }

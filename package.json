@@ -20,7 +20,7 @@
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "check:rust": "cargo check --workspace",
     "check:all": "pnpm check && pnpm check:rust",
-    "test:forum": "node --experimental-strip-types --test scripts/forum-*.test.mjs",
+    "test:forum": "node --experimental-strip-types --test --test-concurrency=1 scripts/forum-*.test.mjs",
     "release:check": "node scripts/check-release-version.mjs",
     "tauri": "tauri"
   },
