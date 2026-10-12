@@ -1,6 +1,6 @@
 [package]
 name = "danxi-next"
-version = "0.1.2"
+version = "0.1.3"
 description = "A maintainable web and desktop client for DanXi"
 authors = ["DanXi Next Contributors"]
 edition = "2024"
